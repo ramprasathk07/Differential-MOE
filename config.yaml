@@ -29,23 +29,19 @@ n_limited_groups: 4
 score_func: softmax
 route_scale: 1.0
 
-
 # Attention Dimensions
 qk_nope_head_dim: 64
 qk_rope_head_dim: 64
 v_head_dim: 128
 
-
 # LoRA (memory-efficient finetuning)
 q_lora_rank: 16
 kv_lora_rank: 8
-
 
 # Rotary Positional Encoding
 original_seq_len: 4096
 rope_theta: 10000.0
 rope_factor: 4.0           # enables 8k context safely
-
 
 # Extended Attention Scaling
 beta_fast: 32

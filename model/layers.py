@@ -393,21 +393,61 @@ class Indexer(nn.Module):
     def forward(self, x: torch.Tensor, qr: torch.Tensor, 
                 start_pos: int, freqs_cis: torch.Tensor, 
                 mask: Optional[torch.Tensor]):
+        
         bsz, seqlen, _ = x.size()
         end_pos = start_pos + seqlen
         q = self.wq_b(qr)
+
+        ## divide for each head
         q = q.view(bsz, seqlen, self.n_heads, self.head_dim)
 
-        q_pe, q_nope = torch.split(q,[self.rope_head_dim, self.head_dim - self.rope_head_dim], dim=-1)
 
+        q_pe, q_nope = torch.split(q,[self.rope_head_dim, self.head_dim - self.rope_head_dim], dim=-1)
         q_pe = apply_rotary_emb(q_pe, freqs_cis, interleaved=False)
         q = torch.cat([q_pe, q_nope], dim=-1)
 
         k = self.wk(x)
+        ## For stability and score drift
         k = self.k_norm(k)
-
         k_pe, k_nope = torch.split(k,[self.rope_head_dim, self.head_dim - self.rope_head_dim], dim=-1)
         k_pe = apply_rotary_emb(k_pe.unsqueeze(2), freqs_cis, interleaved=False).squeeze(2)
         k = torch.cat([k_pe, k_nope], dim=-1)
 
+        q = rotate_activation(q)
+        k = rotate_activation(k)
 
+        ## Quant to FP8
+        q_fp8,q_scale = act_quant(q,block_size, self.scale_fmt)
+        k_fp8,k_scale = act_quant(k,block_size, self.scale_fmt)
+
+        ## Register 
+        self.k_cache[:bsz, start_pos:end_pos] = k_fp8
+        self.k_scale_cache[:bsz, start_pos:end_pos] = k_scale
+
+        weights = self.weights_proj(x.float())* self.n_heads ** -0.5
+        weights = weights.unsqueeze(-1) * q_scale * self.softmax_scale
+        
+        index_score = fp8_index(
+            q_fp8.contiguous(),
+            weights,
+            self.k_cache[:bsz, :end_pos].contiguous(),
+            self.k_scale_cache[:bsz,:end_pos].contiguous()
+        )
+
+        if mask is not None:
+            index_score += mask
+        
+        topk_indices = index_score.topk(min(self.index_topk, end_pos), dim=-1)[1]
+        topk_indices_ = topk_indices.clone()
+        dist.broadcast(topk_indices_, src=0)
+        assert torch.all(topk_indices == topk_indices_), f"{topk_indices=} {topk_indices_=}"
+        return topk_indices
+
+
+def weight_dequant(weight, scale):
+    shape = weight.shape
+    assert weight.dim() == 2
+    weight = weight.view(shape[0] // block_size, block_size, shape[1] // block_size, block_size).transpose(1, 2).contiguous().view(-1, block_size * block_size)
+    weight = (weight.float() * scale.view(-1, 1).float()).to(torch.get_default_dtype()).view(shape[0] // block_size, shape[1] // block_size, block_size, block_size).transpose(1, 2).contiguous().view(shape)
+    return weight
+    

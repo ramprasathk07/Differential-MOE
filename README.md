@@ -1,8 +1,8 @@
-# Differential Transformer MoE 🚀
+# Differential Transformer MoE
 
 Hey there! Welcome to my journey of building a **Differential Transformer with Mixture of Experts (MoE)** from scratch. This is a learning project where I'm implementing a modern, efficient language model architecture designed to run on AMD MI300X GPUs.
 
-## 🎯 What's This About?
+## What's This About?
 
 I'm building a ~18-22B parameter sparse MoE model that combines some really cool architectural innovations:
 
@@ -105,7 +105,7 @@ This project is all about learning by doing. I'm exploring:
 ### Installation
 ```bash
 # Clone the repo
-git clone <your-repo-url>
+git clone https://github.com/ramprasathk07/Differential-MOE.git
 cd diff_llm
 
 # Install dependencies (coming soon)
