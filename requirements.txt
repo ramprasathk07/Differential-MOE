@@ -1,0 +1,15 @@
+torch>=2.1.0
+pyyaml
+tilelang
+fast-hadamard-transform
+einops
+datasets
+tiktoken
+wandb
+tqdm
+numpy
+packaging
+ninja
+tensorboard
+transformers
+accelerate

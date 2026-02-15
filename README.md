@@ -32,13 +32,51 @@ I'm building a ~18-22B parameter sparse MoE model that combines some really cool
 
 ```
 diff_llm/
+├── train.py             # Main training script
 ├── config.yaml          # Model hyperparameters and training config
-└── model/
-    ├── __init__.py      # Package initialization
-    ├── modelargs.py     # Configuration dataclass and YAML loader
-    ├── layers.py        # Core neural network layers (attention, MLP, MoE)
-    └── kernel.py        # Custom FP8 CUDA kernels using TileLang
+├── model/
+│   ├── __init__.py      # Package initialization
+│   ├── modelargs.py     # Configuration dataclass and YAML loader
+│   ├── layers.py        # Core neural network layers (attention, MLP, MoE)
+│   └── kernel.py        # Custom FP8 CUDA kernels using TileLang
+├── training/
+│   ├── trainer.py       # Full-featured training loop (WandB, Tensorboard, Checkpointing)
+│   ├── data.py          # Streaming dataset loader for HuggingFace
+│   └── utils.py         # Helper utilities (Logging, Metrics)
+└── tests/               # Unit tests
 ```
+
+## 🏋️ Training Guide
+
+### 1. Setup Environment
+```bash
+# Create and activate virtual environment (recommended)
+python -m venv venv
+# Windows
+.\venv\Scripts\activate
+# Linux/Mac
+source venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+```
+
+### 2. Run Training
+To start training with default settings (HuggingFace FineWeb-Edu dataset):
+```bash
+python train.py --run_name "differential-moe-v1" --batch_size 8 --accumulate_grad_batches 4 --use_wandb
+```
+
+### 3. Monitoring
+- **WandB**: If enabled, logs will be sent to your project dashboard.
+- **Tensorboard**: Run `tensorboard --logdir checkpoints/` to view metrics locally.
+
+### Key Arguments
+- `--config`: Custom config file (default: `config.yaml`)
+- `--dataset`: HuggingFace dataset name (default `HuggingFaceFW/fineweb-edu`)
+- `--dtype`: `bf16` or `fp32` (model supports internal `fp8` logic if enabled in config)
+- `--resume_from`: Path to checkpoint to resume training
+- `--use_amp`: Enable automatic mixed precision
 
 ## 🔧 Current Implementation Status
 
@@ -53,14 +91,12 @@ diff_llm/
   - [x] Differential attention mechanism
   - [x] MoE feed-forward layers with routing
 - [x] YaRN RoPE positional encoding
+- [x] Full training loop with production features
+- [x] Streaming data pipeline
 
 ### 🚧 In Progress / TODO
-- [ ] Complete transformer block assembly
-- [ ] Model initialization and weight loading
-- [ ] Training loop and optimizer setup
-- [ ] Data pipeline and tokenization
-- [ ] Distributed training support
-- [ ] Evaluation and benchmarking
+- [ ] Distributed training support (multi-gpu)
+- [ ] Evaluation and benchmarking suite
 - [ ] Inference optimization
 
 ## 🛠️ Technical Deep Dive
@@ -72,72 +108,44 @@ I've implemented custom CUDA kernels using TileLang for efficient FP8 operations
 - **Fused operations**: Combined quantization + GEMM for speed
 
 ### Differential Attention
-The attention mechanism uses a differential approach to reduce noise:
-- Computes two separate attention maps
-- Subtracts them to cancel out common patterns
-- Helps the model focus on what's truly important
+The attention mechanism uses a differential approach to reduce noise by computing two separate attention maps and subtracting them.
 
 ### MoE Routing
-Smart expert selection with:
-- **Group-limited routing**: Experts organized into 8 groups
-- **Top-4 activation**: Each token routed to 4 experts
-- **Load balancing**: Ensures even expert utilization
+Smart expert selection with Group-limited routing ensuring load balancing and top-4 activation.
 
 ## 🎓 Learning Goals
 
-This project is all about learning by doing. I'm exploring:
-- Modern transformer architectures
-- Efficient training techniques (FP8, MoE)
-- CUDA kernel programming
-- Large-scale model design
-- AMD GPU optimization
+This project is all about learning by doing. I'm exploring modern transformer architectures, efficient training techniques (FP8, MoE), CUDA kernel programming, and large-scale model design.
 
 ## 🚀 Getting Started
 
-### Prerequisites
-```bash
-# Python 3.10+
-# PyTorch 2.0+ with ROCm support
-# TileLang for custom kernels
-# PyYAML for config loading
-```
-
 ### Installation
 ```bash
-# Clone the repo
 git clone https://github.com/ramprasathk07/Differential-MOE.git
 cd diff_llm
-
-# Install dependencies (coming soon)
-pip install -r requirements.txt  # TODO: Create this file
+pip install -r requirements.txt
 ```
 
 ### Configuration
 Edit `config.yaml` to customize the model architecture. Key parameters:
-- `dim`: Model dimension (default: 6144)
-- `n_layers`: Number of transformer layers (default: 48)
-- `n_routed_experts`: Number of MoE experts (default: 64)
-- `max_seq_len`: Maximum sequence length (default: 8192)
+- `dim`: Model dimension
+- `n_layers`: Number of transformer layers
+- `n_routed_experts`: Number of MoE experts
 
 ## 📚 References & Inspiration
-
-This project draws inspiration from several cutting-edge papers and implementations:
 - **Differential Transformers** (Microsoft Research)
 - **DeepSeek-V2/V3** (MLA and MoE architecture)
 - **YaRN** (Extended context via RoPE scaling)
 - **Mixtral** (MoE routing strategies)
 
 ## 🤝 Contributing
-
-This is a personal learning project, but I'm open to suggestions, bug reports, and discussions! Feel free to open an issue if you spot something interesting or have ideas to share.
+This is a personal learning project, but I'm open to suggestions!
 
 ## 📝 License
-
-This project is open source and available under the MIT License (or specify your preferred license).
+MIT License
 
 ## 🙏 Acknowledgments
-
-Huge thanks to the open-source ML community for sharing knowledge, papers, and implementations that make projects like this possible!
+Huge thanks to the open-source ML community!
 
 ---
 
