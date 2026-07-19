@@ -61,6 +61,7 @@ class TrainConfig:
     eval_freq: int = 500
     eval_batches: int = 50
     ckpt_freq: int = 500
+    max_best_checkpoints: int = 2
     seed: int = 42
 
 
