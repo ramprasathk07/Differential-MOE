@@ -91,6 +91,15 @@ class DifferentialAttention(nn.Module):
         # headwise sub-layer norm, weight shared across heads (as in official impl)
         self.subln = RMSNorm(2 * self.head_dim, eps=1e-5)
 
+    def current_lambda(self) -> torch.Tensor:
+        """Per-head lambda, in fp32. Pure function of current parameters -- no
+        forward pass needed, so this is cheap enough to log every training step."""
+        return (
+            torch.exp(torch.sum(self.lambda_q1 * self.lambda_k1, dim=-1).float())
+            - torch.exp(torch.sum(self.lambda_q2 * self.lambda_k2, dim=-1).float())
+            + self.lambda_init
+        )
+
     def forward(self, x: torch.Tensor, rope: torch.Tensor) -> torch.Tensor:
         B, S, D = x.shape
         H, hd = self.n_heads, self.head_dim
@@ -110,13 +119,7 @@ class DifferentialAttention(nn.Module):
         a1 = F.scaled_dot_product_attention(q1, k1, v, is_causal=True)
         a2 = F.scaled_dot_product_attention(q2, k2, v, is_causal=True)
 
-        # lambda in fp32 to keep exp() stable under fp16 autocast
-        lam = (
-            torch.exp(torch.sum(self.lambda_q1 * self.lambda_k1, dim=-1).float())
-            - torch.exp(torch.sum(self.lambda_q2 * self.lambda_k2, dim=-1).float())
-            + self.lambda_init
-        )
-        lam = lam.view(1, H, 1, 1).type_as(a1)
+        lam = self.current_lambda().view(1, H, 1, 1).type_as(a1)
 
         o = a1 - lam * a2
         o = self.subln(o) * (1.0 - self.lambda_init)

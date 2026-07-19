@@ -1,4 +1,4 @@
-"""Train one config on TinyStories. Kaggle-first: fp16 AMP + GradScaler (T4 has
+"""Train one config on the BabyLM corpus. Kaggle-first: fp16 AMP + GradScaler (T4 has
 no bf16), map-style memmap dataloader (no worker duplication), checkpoint/resume
 every ckpt_freq steps (survives Kaggle's 12h session limit and preemption).
 
@@ -36,8 +36,9 @@ import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel
 
 from src.data import eval_batches, get_batch, load_tokens
-from src.eval import bytes_per_token_estimate, evaluate
+from src.eval import bytes_per_token_estimate, evaluate, expert_stats
 from src.model import Config, Transformer, count_params
+from src.model.moe import MoE
 
 
 def set_seed(seed: int):
@@ -121,6 +122,25 @@ class BestCheckpoints:
     @property
     def best_nll(self) -> float:
         return self.entries[0]["nll"] if self.entries else float("inf")
+
+
+def train_time_diagnostics(raw_model: Transformer) -> Dict[str, Any]:
+    """Cheap, forward-pass-free (lambda) or forward-pass-piggybacked (expert
+    routing, from the last training micro-batch) diagnostics -- safe to compute
+    every log_freq step, not just at eval_freq."""
+    diag: Dict[str, Any] = {"lambda_means": {}, "lambda_raw": {}, "expert_entropy": {},
+                             "expert_imbalance": {}, "expert_counts": {}}
+    for i, block in enumerate(raw_model.blocks):
+        if hasattr(block.attn, "current_lambda"):
+            lam = block.attn.current_lambda().detach().cpu().tolist()
+            diag["lambda_raw"][i] = lam
+            diag["lambda_means"][i] = sum(lam) / len(lam)
+        if block.is_moe and isinstance(block.ffn, MoE) and block.ffn.last_counts is not None:
+            entropy, imbalance = expert_stats(block.ffn.last_counts)
+            diag["expert_entropy"][i] = entropy
+            diag["expert_imbalance"][i] = imbalance
+            diag["expert_counts"][i] = block.ffn.last_counts.detach().cpu().tolist()
+    return diag
 
 
 def git_commit() -> str:
@@ -282,8 +302,8 @@ def main():
         csv_writer = csv.writer(csv_file)
         if csv_new:
             csv_writer.writerow(
-                ["step", "tokens_trained", "train_loss", "train_ppl", "lr", "grad_norm", "tok_per_sec",
-                 "val_nll", "val_ppl", "val_bits_per_byte", "val_top1"]
+                ["step", "tokens_trained", "train_loss", "train_ppl", "train_aux_loss", "train_router_z_loss",
+                 "lr", "grad_norm", "tok_per_sec", "val_nll", "val_ppl", "val_bits_per_byte", "val_top1"]
             )
 
     tokens_per_step = cfg.train.batch_size * cfg.model.seq_len * cfg.train.accum_steps * world_size
@@ -292,6 +312,8 @@ def main():
     t0 = time.time()
     train_start = time.time()
     running_loss = 0.0
+    running_aux = 0.0
+    running_z = 0.0
     running_count = 0
     last_avg_loss = None
 
@@ -302,6 +324,8 @@ def main():
             g["lr"] = lr
 
         step_loss = 0.0
+        step_aux = 0.0
+        step_z = 0.0
         for _ in range(cfg.train.accum_steps):
             x, y = get_batch(train_data, cfg.train.batch_size, cfg.model.seq_len, gen, device)
             with torch.autocast(device_type=device_type, dtype=torch.float16, enabled=cfg.train.amp):
@@ -311,6 +335,8 @@ def main():
                 loss = loss / cfg.train.accum_steps
             scaler.scale(loss).backward()
             step_loss += ce.item() / cfg.train.accum_steps
+            step_aux += aux_loss.item() / cfg.train.accum_steps
+            step_z += z_loss.item() / cfg.train.accum_steps
 
         scaler.unscale_(optimizer)
         grad_norm = torch.nn.utils.clip_grad_norm_(raw_model.parameters(), cfg.train.grad_clip)
@@ -318,33 +344,63 @@ def main():
         scaler.update()
 
         running_loss += step_loss
+        running_aux += step_aux
+        running_z += step_z
         running_count += 1
         tokens_trained = tokens_per_step * (step + 1)
 
         if is_main and (step + 1) % cfg.train.log_freq == 0:
             avg_loss = running_loss / running_count
+            avg_aux = running_aux / running_count
+            avg_z = running_z / running_count
             last_avg_loss = avg_loss
             elapsed = time.time() - t0
             tok_per_sec = (
                 cfg.train.batch_size * cfg.model.seq_len * cfg.train.accum_steps * world_size * cfg.train.log_freq
             ) / elapsed
             ppl = math.exp(min(avg_loss, 50))
+            diag = train_time_diagnostics(raw_model)
+            diag_summary = ""
+            if diag["lambda_means"]:
+                mean_lam = sum(diag["lambda_means"].values()) / len(diag["lambda_means"])
+                diag_summary += f" lambda_avg {mean_lam:.3f}"
+            if diag["expert_entropy"]:
+                mean_ent = sum(diag["expert_entropy"].values()) / len(diag["expert_entropy"])
+                diag_summary += f" expert_entropy_avg {mean_ent:.3f}"
             print(
                 f"step {step+1}/{cfg.train.max_steps} tokens {tokens_trained/1e6:.1f}M loss {avg_loss:.4f} "
-                f"ppl {ppl:.2f} lr {lr:.2e} grad_norm {grad_norm:.2f} tok/s {tok_per_sec:.0f}"
+                f"ppl {ppl:.2f} aux {avg_aux:.4f} z {avg_z:.4f} "
+                f"lr {lr:.2e} grad_norm {grad_norm:.2f} tok/s {tok_per_sec:.0f}{diag_summary}"
             )
             csv_writer.writerow(
-                [step + 1, tokens_trained, avg_loss, ppl, lr, grad_norm.item(), tok_per_sec, "", "", "", ""]
+                [step + 1, tokens_trained, avg_loss, ppl, avg_aux, avg_z, lr, grad_norm.item(), tok_per_sec,
+                 "", "", "", ""]
             )
             csv_file.flush()
             if wandb_run:
-                wandb_run.log(
-                    {"train/loss": avg_loss, "train/ppl": ppl, "train/lr": lr,
-                     "train/grad_norm": grad_norm.item(), "train/tok_per_sec": tok_per_sec,
-                     "train/tokens_trained": tokens_trained},
-                    step=step + 1,
-                )
+                import wandb as _wandb
+
+                log = {"train/loss": avg_loss, "train/ppl": ppl, "train/aux_loss": avg_aux,
+                       "train/router_z_loss": avg_z, "train/lr": lr,
+                       "train/grad_norm": grad_norm.item(), "train/tok_per_sec": tok_per_sec,
+                       "train/tokens_trained": tokens_trained}
+                for i, mean_lam_i in diag["lambda_means"].items():
+                    log[f"train/lambda_mean_L{i}"] = mean_lam_i
+                    log[f"train/lambda_hist_L{i}"] = _wandb.Histogram(diag["lambda_raw"][i])
+                for i, e in diag["expert_entropy"].items():
+                    log[f"train/expert_entropy_L{i}"] = e
+                    log[f"train/expert_imbalance_L{i}"] = diag["expert_imbalance"][i]
+                    log[f"train/expert_counts_L{i}"] = _wandb.Histogram(
+                        np.repeat(np.arange(len(diag["expert_counts"][i])), diag["expert_counts"][i])
+                        if sum(diag["expert_counts"][i]) > 0 else [0]
+                    )
+                if device_type == "cuda":
+                    log["train/gpu_mem_allocated_mb"] = torch.cuda.memory_allocated(device) / 1e6
+                    log["train/gpu_mem_reserved_mb"] = torch.cuda.memory_reserved(device) / 1e6
+                wandb_run.log(log, step=step + 1)
             running_loss = 0.0
+            running_aux = 0.0
+            running_z = 0.0
             running_count = 0
             t0 = time.time()
 
@@ -358,20 +414,26 @@ def main():
                     f"entropy {result.expert_entropy}"
                 )
                 csv_writer.writerow(
-                    [step + 1, tokens_trained, "", "", "", "", "", result.nll, result.perplexity,
+                    [step + 1, tokens_trained, "", "", "", "", "", "", "", result.nll, result.perplexity,
                      result.bits_per_byte, result.top1_acc]
                 )
                 csv_file.flush()
                 if wandb_run:
+                    import wandb as _wandb
+
                     log = {"val/nll": result.nll, "val/ppl": result.perplexity, "val/top1": result.top1_acc}
                     if result.bits_per_byte is not None:
                         log["val/bits_per_byte"] = result.bits_per_byte
                     for i, e in result.expert_entropy.items():
                         log[f"val/expert_entropy_L{i}"] = e
-                    for i, imb in result.expert_imbalance.items():
-                        log[f"val/expert_imbalance_L{i}"] = imb
+                        log[f"val/expert_imbalance_L{i}"] = result.expert_imbalance[i]
+                        ecounts = result.expert_counts[i]
+                        log[f"val/expert_counts_L{i}"] = _wandb.Histogram(
+                            np.repeat(np.arange(len(ecounts)), ecounts) if sum(ecounts) > 0 else [0]
+                        )
                     for i, lam in result.lambda_values.items():
                         log[f"val/lambda_mean_L{i}"] = sum(lam) / len(lam)
+                        log[f"val/lambda_hist_L{i}"] = _wandb.Histogram(lam)
                     wandb_run.log(log, step=step + 1)
 
                 best_ckpts.offer(step + 1, result.nll, raw_model, optimizer, scaler, gen)

@@ -1,6 +1,6 @@
 # Differential-MoE
 
-A controlled ablation of Differential Attention and Mixture-of-Experts, trained from scratch on the TinyStories dataset.
+A controlled ablation of Differential Attention and Mixture-of-Experts, trained from scratch on the BabyLM Challenge corpus.
 
 ## Overview
 
@@ -11,7 +11,9 @@ This project measures whether two independent architectural ideas actually help 
 
 Rather than build a single large model and assert both ideas help, this repository runs a 2x2 ablation — standard vs. differential attention, crossed with dense vs. MoE feed-forward — with every other variable (tokenizer, data order, schedule, token budget) held fixed. Attention variants are parameter-matched (4·dim² per layer either way); dense and MoE variants are matched on *active* parameters per token, not total. The goal is a clean answer, not a large model.
 
-Training targets TinyStories on a free Kaggle T4 GPU (single or dual via DDP), at 16M-55M parameter scale — large enough to produce a legible signal, small enough to iterate for the cost of electricity.
+Training data is the [BabyLM Challenge](https://babylm.github.io/) corpus — six domains (child-directed speech, adult conversation, literary prose, subtitles, Wikipedia, telephone dialogue) at a fixed, deliberately small word budget (10M words for the ablation tier, 100M for the headline tier), released per-domain rather than as a single undifferentiated text blob. That domain separation is why this dataset was chosen over a single-genre corpus: it gives Mixture-of-Experts routing actual heterogeneity to specialize against, which a narrow, uniform corpus would not.
+
+Training targets a free Kaggle T4 GPU (single or dual via DDP), at 16M-55M parameter scale — large enough to produce a legible signal, small enough to iterate for the cost of electricity.
 
 Full experimental design, parity methodology, metrics protocol, and risk register: [`docs/plan.md`](docs/plan.md).
 
@@ -28,7 +30,7 @@ Architecture, training pipeline, and test suite are complete and verified (unit 
 | Position encoding | Rotary embeddings (RoPE), no long-context extension |
 | Normalization | RMSNorm, pre-norm residual blocks |
 | Precision | fp16 autocast + `GradScaler` (targets T4, which lacks native bf16) |
-| Tokenizer | Byte-level BPE trained on TinyStories; vocabulary size chosen by a fertility/compression sweep rather than a fixed guess |
+| Tokenizer | Byte-level BPE trained on the BabyLM corpus; vocabulary size chosen by a fertility/compression sweep rather than a fixed guess |
 | Data pipeline | Token stream pre-tokenized once into a memory-mapped uint16 file; fixed-length windows, no padding |
 | Distributed training | Optional `DistributedDataParallel`, opt-in via a single flag |
 
@@ -85,11 +87,11 @@ pip install -r requirements.txt
 python -m src.data.train_tokenizer --sweep --candidates 2048 4096 8192 16384
 ```
 
-**2. Train and save the chosen tokenizer, then tokenize the dataset:**
+**2. Train and save the chosen tokenizer, then tokenize the dataset.** `--track strict-small` (10M words) is the ablation tier's default; the headline tier uses `--track strict` (100M words) into a separate `data_b/` directory:
 
 ```bash
-python -m src.data.train_tokenizer --vocab_size 4096 --out data/tokenizer.json
-python -m src.data.prepare --tokenizer data/tokenizer.json --out_dir data
+python -m src.data.train_tokenizer --vocab_size 4096 --out data/tokenizer.json --track strict-small
+python -m src.data.prepare --tokenizer data/tokenizer.json --out_dir data --track strict-small
 ```
 
 **3. Inspect parameter counts before spending any compute:**
@@ -138,7 +140,7 @@ The suite verifies, among other things: every parameter receives a gradient (no 
 
 - Ye, T. et al. "Differential Transformer." 2024.
 - DeepSeek-AI. "DeepSeek-V2" and "DeepSeek-V3" technical reports — Mixture-of-Experts routing design.
-- Eldan, R. and Li, Y. "TinyStories: How Small Can Language Models Be and Still Speak Coherent English?" 2023.
+- Charpentier, L. et al. "The 2024/2025 BabyLM Challenge: Sample-Efficient Pretraining on Developmentally Plausible Corpora."
 
 ## License
 
