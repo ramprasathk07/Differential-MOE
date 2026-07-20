@@ -1,9 +1,13 @@
-# Diff-MoE Rebuild Plan — TinyStories @ Kaggle
+# Diff-MoE Rebuild Plan — BabyLM @ Kaggle
 
 Goal: resurrect this repo as a **small, trainable, measurable** research project:
-*"Does Differential Attention help a Mixture-of-Experts LM at ~15–50M scale?"*
-Train on TinyStories inside Kaggle's free GPU quota, report NLL / perplexity /
-expert-utilization, publish results + 2–3 blog posts.
+*"Does Differential Attention help a Mixture-of-Experts LM at 16M–300M scale?"*
+Train on the BabyLM Challenge corpus inside Kaggle's free GPU quota, report
+NLL / perplexity / bits-per-byte / expert-utilization, publish results + blog posts.
+
+Three tiers, same 2×2 ablation each: **A** ~16M (custom 4k BPE, strict-small),
+**B** ~55M (custom 8k BPE), **S** ~295M active (cl100k frontier tokenizer,
+strict). Each tier is a full week's Kaggle quota — run one at a time.
 
 ---
 
@@ -62,7 +66,7 @@ Parity rules:
 
 **Tier A — ablation workhorse (~16M params, ~11M non-embedding active)**
 ```yaml
-vocab_size: 4096        # custom BPE trained on TinyStories, tied embeddings
+vocab_size: 4096        # custom BPE trained on BabyLM, tied embeddings
 dim: 384
 n_layers: 8
 seq_len: 512
@@ -96,21 +100,66 @@ Approximate counts: ≈ **220M raw / 57M active** (fp16 weights + AdamW states
 ≈ 3.5 GB — fits T4 16 GB; full checkpoint ≈ 2.6 GB, keep only last + best on
 Kaggle disk).
 
+**Tier S — scale-up ablation (~295M active, frontier tokenizer)**
+```yaml
+vocab_size: 100352        # cl100k (100,263) padded to a multiple of 128
+dim: 896
+n_layers: 16
+seq_len: 512
+heads: 14 std / 7 diff (head_dim 64)
+dense inter: 3584         # 4 x dim
+moe: 8 experts, top-2, expert_inter 1792, 0 shared
+batch 4 x accum 32 x 2 GPU = 256 seqs = 131k tok/step
+```
+Measured by `src/params.py`: **295.5M active** for all four configs (dense
+295.47M, diff 295.50M — 0.01% apart; MoE **700.2M raw / 295.6M active**, i.e.
+2.4× stored capacity at equal compute). Configs: `configs/s_{dense,diff,moe,diffmoe}.yaml`.
+
+Why this shape rather than a wider/deeper one: with a 100k vocab the embedding
+table is ~90M params on its own, so "300–400M total" is a narrower model than
+it sounds. At a fixed 7.5h/run budget, dim 1024 × 24 layers (505M) would halve
+the tokens each run sees — worse-trained models for the same wall-clock.
+
+**Honest limitation to report, not hide.** At 7.5h/run on 2×T4 each tier-S run
+sees ~380M tokens ⇒ ≈1.3 tokens/param, roughly GPT-3's ratio but ~15× below
+Chinchilla-optimal (~20). Compute-optimal for that budget would be ~75M params
+× 1.5B tokens. So tier S is deliberately over-parameterised against a fixed
+corpus: expect train/val divergence, and **do not expect it to beat a
+well-trained small model on fluency**. That is on-topic for BabyLM — whose
+entire premise is a fixed, small data budget — but it must be stated plainly in
+the writeup rather than glossed. If fluency is the goal, the lever is more
+unique tokens (FineWeb-Edu), not more parameters.
+
 Exact counts printed by `src/params.py` (write it first; README table comes
 from its output, never hand-computed).
 
 ### Tokenizer (adaptive) & batching
 
 **Adaptive tokenizer = data-driven vocab selection**, not a fixed guess:
-1. Train candidate BPE vocabs on TinyStories: 2k, 4k, 8k, 16k.
-2. Score each on held-out stories: **fertility** (tokens/word — lower is
-   better), byte-compression ratio, % words needing >2 subwords, coverage of
-   the eval slice.
-3. Pick the knee of the fertility-vs-vocab-size curve (expected: 4k–8k for
-   TinyStories' tiny vocabulary). This is a zero-GPU step; document the sweep
-   table in the README + blog.
+1. Train candidate BPE vocabs on the BabyLM mix: 2k, 4k, 8k, 16k.
+2. Score each on the held-out dev split: **fertility** (tokens/word — lower is
+   better) and byte-compression ratio.
+3. Pick the knee of the fertility-vs-vocab-size curve. Measured on BabyLM:
+   2048 → 1.399, 4096 → 1.278, 8192 → 1.226, 16384 → 1.216 — the drop per
+   doubling collapses after 4k (−8.7%, −4.1%, −0.8%), so **4096** for tier A.
+   Zero-GPU step; the sweep table goes in the README + blog.
 4. Cross-vocab fairness in reports comes from **bits-per-byte** (§3), which is
    tokenizer-independent — so the choice can't silently rig PPL comparisons.
+
+**Pretrained frontier tokenizers (tier S).** `train_tokenizer.py --pretrained
+hf:<id>` scores cl100k / Qwen / GPT-2 in the same sweep, so the choice rests on
+the measured fertility gap on *this* corpus rather than on "bigger is better".
+The tradeoff is embedding cost — vocab × dim params — which is why a frontier
+vocab only makes sense once the model is wide: GPT-2's 50k vocab is 123% of a
+16M model but 14.7% at dim 1024. Two mechanical consequences:
+- Vocab > 65535 no longer fits `uint16`, so `prepare.py` switches to `uint32`
+  (doubling `.bin` size) and records the dtype in `meta.json`; `load_tokens`
+  reads it back. Guarded by `tests/test_token_storage.py`.
+- The fp32 logits tensor is `batch × seq × vocab × 4B` — at vocab 100k it
+  dominates T4 memory, which is why tier S uses micro-batch 4 with accum 32
+  rather than the 16×8 used at tier A.
+`train.py` refuses to start if a config's `vocab_size` can't cover the data's
+max token id — the original repo's fatal bug (§1, row 5), now impossible.
 
 **Batching = packed windows, zero padding (deliberate).** The token stream is
 `story <|endoftext|> story <|endoftext|> ...` chunked into fixed 512-token
@@ -128,20 +177,33 @@ NLL at all. Low priority — same leakage applies equally to all 4 runs, so the
 2×2 comparison stays fair without it.
 
 ### Training recipe
-- Optimizer: AdamW, lr 3e-4 (tier A) / 2.5e-4 (tier B), β=(0.9, 0.95), wd 0.1
-  on ≥2-D non-embedding weights only (exclude router weight and λ params too).
+- Optimizer: AdamW, lr 3e-4 (tier A) / 2.5e-4 (tier B) / 2e-4 (tier S),
+  β=(0.9, 0.95), wd 0.1 on ≥2-D non-embedding weights only (router weight and
+  λ params excluded).
 - Schedule: linear warmup 2% of steps → cosine to 10% of peak. One cycle, no restarts.
 - Precision: fp16 AMP + GradScaler on T4 (router, λ params, softmax/exp in fp32).
-- Batch: 16 × 512 tokens, grad-accum 8 → 65K tokens/step, grad-clip 1.0.
-- Token budget: 1 epoch of TinyStories ≈ **~460M tokens** (~7,000 optimizer steps;
-  Chinchilla-ish for ~20M params; tier B gets same budget — note as limitation).
+- Batch: tier A/B 16 × 512 × accum 8; tier S 4 × 512 × accum 32 (large-vocab
+  logits memory). Both give 65K tok/step per GPU, ×2 under DDP. Grad-clip 1.0.
+- **Set `max_steps` from the corpus, not by habit.** BabyLM is small:
+  strict-small ≈ 13M tokens, strict ≈ 128M. At 131K tok/step on 2 GPUs, the
+  inherited `max_steps: 7000` is 918M tokens = **72 epochs** of strict-small —
+  deep in memorisation territory. Target ≈ 3–4 epochs:
+  `max_steps = target_tokens ÷ (batch × seq × accum × n_gpu)`, and record the
+  resulting epoch count in a config comment. The notebook computes this from
+  the probe's measured tok/s.
 - Checkpoint + resume every 30 min (Kaggle preemption survival), seed logged.
 
-### Kaggle budget math (30 h GPU/week, 12 h max session, T4)
-- Throughput probe first (phase 3): measure tok/s, then commit.
-- Estimates: tier A ~30–60K tok/s → 2–4 h/run × 4 runs = 8–16 h.
-  Tier B ~15–25K tok/s → 5–8 h, single run (winner config from ablation).
-- Total ≈ 20–24 h → fits one week's quota; resume makes multi-session safe.
+### Kaggle budget math (30 h GPU/week, 12 h max session, T4 ×2)
+- Throughput probe first (phase 3): measure tok/s, then commit. Every number
+  below is an *estimate at ~25 effective TFLOP/s* and must be replaced by the
+  measured value before a full run.
+- Tier A (~16M): ~2–4 h/run × 4 runs = 8–16 h.
+- Tier S (~295M): 30 h ÷ 4 runs = **7.5 h/run** ⇒ ~380M tokens/run
+  (≈3.3 epochs of strict, ≈1.3 tok/param). Consumes a full week's quota.
+- Do not run tier A and tier S in the same week; each is a full quota.
+- Resume makes multi-session safe — but `/kaggle/working` is wiped between
+  sessions, so save it as a Dataset and copy back (never train into
+  `/kaggle/input`, which is read-only).
 
 ---
 
@@ -177,7 +239,7 @@ tokens of `val.bin`, identical windows for every run and every eval step.
 **Qualitative**
 - 20 fixed prompts, greedy + temperature 0.8 / top-p 0.9, logged at every ckpt.
 - Optional: LLM-judge rubric (grammar / creativity / consistency / plot, scored
-  1–10, TinyStories-paper style) — same judge model + prompt for all runs, run
+  1–10, TinyStories-paper style rubric) — same judge model + prompt for all runs, run
   once at the end on final checkpoints.
 
 **Reporting rules**
@@ -207,8 +269,10 @@ src/
     block.py         # pre-norm block, plain residual (drop fused-add-norm cleverness)
     transformer.py   # tied embeddings, causal via SDPA is_causal=True
   data/
-    train_tokenizer.py   # BPE 4k/8k on TinyStories (HF tokenizers)
-    prepare.py           # tokenize once → uint16 memmap train.bin/val.bin (~1 GB)
+    babylm.py            # fetch the 6 BabyLM domain files (train/dev/test)
+    tokenizer.py         # one adapter over custom BPE / HF / tiktoken + dtype choice
+    train_tokenizer.py   # BPE sweep on BabyLM; --pretrained scores frontier vocabs
+    prepare.py           # tokenize once → uint16/uint32 memmap + meta.json
     dataset.py           # memmap random-window sampler — kills streaming/worker bugs
   train.py           # AMP fp16, accum, warmup+cosine, aux losses, resume, wandb/CSV
   eval.py            # val NLL (nats + bits/token), PPL, top-1 acc, sample generations
@@ -341,7 +405,7 @@ Audience: practitioners. Every bug here is one someone is hitting right now.
 
 ### Blog 2 — "Does Differential Attention help at 20M parameters? A $0 ablation"
 Audience: research-curious. The parity discipline is the differentiator.
-1. Why small-scale ablations are underrated; TinyStories as a microscope.
+1. Why small-scale ablations are underrated; BabyLM as a microscope.
 2. Parity methodology (the real contribution): 4d² attention parity, active-param
    FFN parity, identical data order.
 3. Setup + budget math: free T4, 30 h/week, quota arithmetic.

@@ -91,15 +91,22 @@ section 2 for the full rationale.
 
 ```mermaid
 flowchart TD
-    A["Raw TinyStories text\n(HuggingFace dataset)"] --> B["train_tokenizer.py --sweep\nCPU only, no GPU\ntrains SEVERAL candidate vocabularies\njust to compare them"]
+    A["Raw BabyLM text\n(6 domain files from HuggingFace)"] --> B["train_tokenizer.py --sweep\nCPU only, no GPU\ntrains SEVERAL candidate vocabularies\njust to compare them"]
     B --> C{"Pick vocab_size\nfrom the fertility table"}
     C --> D["train_tokenizer.py\ntrains the FINAL tokenizer\nat the chosen vocab_size"]
+    A -.tier S: skip training.-> P["pretrained frontier tokenizer\nhf:Xenova/gpt-4 (cl100k)\nalready built, nothing to learn"]
     D --> E["tokenizer.json\n(frozen vocabulary + merge rules)"]
-    E --> F["prepare.py\nencodes ALL story text into integer IDs\nusing the frozen tokenizer.json"]
-    F --> G["train.bin / val.bin\n(flat array of integer token IDs)"]
+    E --> F["prepare.py\nencodes ALL text into integer IDs\nusing the frozen tokenizer"]
+    P --> F
+    F --> G["train.bin / val.bin / test.bin\n+ meta.json (dtype, vocab, spec)"]
     G --> H["train.py\nthe actual neural network\ntrained with gradient descent, on GPU,\nfor thousands of steps"]
     H --> I["checkpoints + report.json\n(the trained model)"]
 ```
+
+Tiers A and B walk the whole left branch (train a custom BPE first). Tier S
+takes the dashed shortcut: a frontier tokenizer is *already trained* by someone
+else, so stages 1–2 collapse to "download it" and the pipeline picks up at
+`prepare.py`.
 
 Stage by stage, with the actual commands:
 
@@ -123,11 +130,34 @@ no model has been constructed yet, no GPU has been touched.
 ```bash
 python -m src.data.prepare --tokenizer data/tokenizer.json --out_dir data
 ```
-This reads every story, encodes it into integer IDs using the frozen `tokenizer.json`,
-and writes the entire result as one flat binary file of integers
-(`data/train.bin`, `data/val.bin`). This is not training either — it's a deterministic
-encoding pass, like gzip-ing a file. It happens once, and every subsequent model run
-reads from these files directly, never touching raw text or the tokenizer again.
+This reads every line of every domain, encodes it into integer IDs using the frozen
+tokenizer, and writes the result as one flat binary file of integers
+(`data/train.bin`, `data/val.bin`, `data/test.bin`). This is not training either — it's
+a deterministic encoding pass, like gzip-ing a file. It happens once, and every
+subsequent model run reads from these files directly, never touching raw text or the
+tokenizer again.
+
+Alongside them it writes `meta.json`, which records how the ids were stored:
+
+```json
+{"dtype": "uint32", "vocab_size": 100263, "max_token_id": 100257,
+ "tokenizer_spec": "hf:Xenova/gpt-4", "tokens": {"train": 136000000}}
+```
+
+That `dtype` matters. Token ids are stored as fixed-width integers, and `uint16` only
+counts to 65,535 — fine for a 4k custom vocab, impossible for cl100k's ~100k or Qwen's
+~152k. Above that ceiling `prepare.py` switches to `uint32`, which doubles the file
+size. `load_tokens` reads the dtype back from `meta.json` rather than assuming, because
+reading uint32 data as uint16 wouldn't crash — it would silently decode as garbage.
+
+**Skipping stages 1–2 with a pretrained tokenizer.** Nothing about the above requires
+that *you* trained the tokenizer, only that it is frozen before `prepare.py` runs. So
+tier S passes a pretrained one straight through:
+```bash
+python -m src.data.prepare --tokenizer hf:Xenova/gpt-4 --out_dir data_s --track strict
+```
+No `tokenizer.json` is written in this case — the spec lives in `meta.json`, and
+everything downstream resolves it from there.
 
 **Stage 4 — model training (the only stage that is actually "training" in the ML sense).**
 ```bash
@@ -167,3 +197,16 @@ parity methodology (`docs/plan.md`) exists to eliminate.
 Tier B (`b_final.yaml`) uses a larger vocabulary (8192 vs. 4096) and therefore needs
 its own tokenizer and its own tokenized dataset (`data_b/` rather than `data/`) — it is
 not compared against tier A directly, so this doesn't break parity within either tier.
+
+Tier S (`s_*.yaml`) does the same with cl100k and `data_s/`. The rule holds at every
+tier: **compare only within a tier**, because a different tokenizer means a different
+number of tokens for the same text, and perplexity per *token* isn't comparable across
+them. That is what bits-per-byte is for — it normalises by raw UTF-8 bytes rather than
+token count, so it is the one metric that survives a tokenizer change (see
+`docs/plan.md` §3).
+
+One guard worth knowing about: `train.py` refuses to start if a config's `vocab_size`
+is smaller than the largest token id in the data, printing the value you should use.
+That mismatch — tokenizer and config disagreeing about vocabulary size — is exactly the
+bug that made the original version of this repo crash on its first batch, and at 7.5
+hours per run it is an expensive one to discover halfway through.
