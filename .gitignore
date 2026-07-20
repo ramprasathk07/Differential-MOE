@@ -10,6 +10,7 @@ WORKFLOW_PLANNER.md
 # training artifacts (large, machine-specific, never committed)
 /data/
 /data_b/
+/data_s/
 checkpoints/
 wandb/
 *.bin

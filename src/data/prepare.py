@@ -31,8 +31,23 @@ from .babylm import iter_domains
 from .tokenizer import TokenizerAdapter, load_tokenizer, token_dtype
 
 
+CHUNK_LINES = 50_000
+
+
 def encode_split(track: str, split: str, tok: TokenizerAdapter, out_path: str,
                  max_lines: int, dtype) -> tuple:
+    """Encode and write one chunk of lines at a time.
+
+    Encoding a whole domain in a single call would build a >100MB string and a
+    tens-of-millions-long Python int list before anything reaches disk, which
+    spikes memory into the gigabytes on the larger domains and gives no sign of
+    progress. Chunking bounds both.
+
+    Chunks split on line boundaries and carry the "\\n" that would have joined
+    them, so the text encoded is identical to the single-call version; only BPE
+    merges that would have spanned a chunk edge differ, and every run reads the
+    same file, so the ablation is unaffected.
+    """
     eot_id = tok.eot_id
     offsets = {}
     pos = 0
@@ -40,16 +55,25 @@ def encode_split(track: str, split: str, tok: TokenizerAdapter, out_path: str,
     tmp_path = out_path + ".tmp"
     with open(tmp_path, "wb") as f:
         for domain, lines in iter_domains(track, split, max_lines):
-            ids = tok.encode("\n".join(lines))
-            ids.append(eot_id)
-            arr = np.asarray(ids, dtype=dtype)
-            arr.tofile(f)
-            max_id = max(max_id, int(arr.max()))
-            offsets[domain] = [pos, pos + len(ids)]
-            pos += len(ids)
-            print(f"  {split}/{domain}: {len(ids):,} tokens")
+            start = pos
+            for i in range(0, len(lines), CHUNK_LINES):
+                text = "\n".join(lines[i:i + CHUNK_LINES])
+                if i + CHUNK_LINES < len(lines):
+                    text += "\n"          # the separator joining this chunk to the next
+                arr = np.asarray(tok.encode(text), dtype=dtype)
+                arr.tofile(f)
+                if arr.size:
+                    max_id = max(max_id, int(arr.max()))
+                pos += arr.size
+                print(f"    {split}/{domain}: {min(i + CHUNK_LINES, len(lines)):,}/{len(lines):,} lines, "
+                      f"{pos - start:,} tokens", flush=True)
+            np.asarray([eot_id], dtype=dtype).tofile(f)   # domain boundary
+            pos += 1
+            max_id = max(max_id, eot_id)
+            offsets[domain] = [start, pos]
+            print(f"  {split}/{domain}: {pos - start:,} tokens", flush=True)
     os.replace(tmp_path, out_path)
-    print(f"{split}: {pos:,} tokens total -> {out_path}")
+    print(f"{split}: {pos:,} tokens total -> {out_path}", flush=True)
     return offsets, pos, max_id
 
 
