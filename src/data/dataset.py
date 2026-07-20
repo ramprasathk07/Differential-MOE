@@ -5,6 +5,8 @@ window offsets, its state is checkpointed, so training data order is exactly
 reproducible across resume. Validation uses fixed strided windows.
 """
 
+import json
+import os
 from typing import Tuple
 
 import numpy as np
@@ -12,7 +14,15 @@ import torch
 
 
 def load_tokens(path: str) -> np.ndarray:
-    return np.memmap(path, dtype=np.uint16, mode="r")
+    """Token width is whatever prepare.py wrote -- uint16 for small vocabs,
+    uint32 once a frontier tokenizer pushes past 65535. meta.json records it;
+    fall back to uint16 for data written before meta.json existed."""
+    meta_path = os.path.join(os.path.dirname(path), "meta.json")
+    dtype = np.uint16
+    if os.path.exists(meta_path):
+        with open(meta_path) as f:
+            dtype = np.dtype(json.load(f).get("dtype", "uint16"))
+    return np.memmap(path, dtype=dtype, mode="r")
 
 
 def get_batch(

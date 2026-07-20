@@ -1,0 +1,47 @@
+# Scale-up tier S, Run A: standard attention + dense FFN (baseline)
+#
+# ~295M params with a cl100k tokenizer (~206M of that is non-embedding).
+# Data must be prepared with a matching tokenizer:
+#   python -m src.data.prepare --tokenizer hf:Xenova/gpt-4 --out_dir data_s --track strict
+# For Qwen instead, set vocab_size: 151680 and use --tokenizer hf:Qwen/Qwen2.5-0.5B.
+run_name: s_dense
+data_dir: data_s
+
+model:
+  # 100352 = 100263 (actual cl100k vocab) padded up to a multiple of 128.
+  # The pad costs ~0.1M params and makes the embedding/logit GEMMs
+  # tensor-core friendly; train.py validates this covers the data's max id.
+  vocab_size: 100352
+  dim: 896
+  n_layers: 16
+  n_heads: 14          # head_dim 64; even, so differential can halve it to 7
+  seq_len: 512
+  tie_embeddings: true
+  attention: standard
+  rope_theta: 10000.0
+  ffn: dense
+  inter_dim: 3584      # 4 x dim
+  norm_eps: 1.0e-6
+
+train:
+  # micro-batch is small on purpose: at vocab 100k the fp32 logits tensor is
+  # batch*seq*vocab*4B, which dominates T4 memory. 4 x 32 x 2 GPUs = 256
+  # sequences = 131k tokens per optimizer step. Raise batch_size (and halve
+  # accum_steps) only after the throughput probe confirms headroom.
+  batch_size: 4
+  accum_steps: 32
+  # 2900 steps x 131k tok = ~380M tokens = ~3.3 epochs of BabyLM-strict.
+  # RECOMPUTE from the probe's measured tok/s before committing quota.
+  max_steps: 2900
+  lr: 2.0e-4
+  min_lr_ratio: 0.1
+  warmup_steps: 60
+  weight_decay: 0.1
+  grad_clip: 1.0
+  amp: true
+  log_freq: 20
+  eval_freq: 250
+  eval_batches: 50
+  ckpt_freq: 250
+  max_best_checkpoints: 2
+  seed: 42

@@ -298,14 +298,25 @@ def main():
             f"  python -m src.data.prepare --tokenizer {cfg.data_dir}/tokenizer.json "
             f"--out_dir {cfg.data_dir} --track <strict-small|strict>"
         )
+    # Config vocab must cover every id in the data. A mismatch here is the
+    # original repo's fatal bug (tokenizer vocab != config vocab -> embedding
+    # index out of range); fail now rather than partway through a paid run.
+    meta_path = os.path.join(cfg.data_dir, "meta.json")
+    if os.path.exists(meta_path):
+        with open(meta_path) as f:
+            meta = json.load(f)
+        max_id = meta.get("max_token_id")
+        if max_id is not None and max_id >= cfg.model.vocab_size:
+            raise SystemExit(
+                f"[{cfg.run_name}] vocab_size mismatch: data in '{cfg.data_dir}' contains "
+                f"token id {max_id}, but the config declares vocab_size={cfg.model.vocab_size}.\n"
+                f"Set vocab_size to at least {max_id + 1} (data was tokenized with "
+                f"{meta.get('tokenizer_spec')}, vocab {meta.get('vocab_size')})."
+            )
+
     train_data = load_tokens(train_path)
     val_data = load_tokens(val_path)
-    tokenizer_path = os.path.join(cfg.data_dir, "tokenizer.json")
-    bytes_per_token = (
-        bytes_per_token_estimate(tokenizer_path, os.path.join(cfg.data_dir, "val.bin"))
-        if os.path.exists(tokenizer_path)
-        else None
-    )
+    bytes_per_token = bytes_per_token_estimate(cfg.data_dir, val_path)
 
     wandb_run = None
     if args.wandb and is_main:

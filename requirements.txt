@@ -3,6 +3,7 @@ pyyaml
 numpy
 datasets
 tokenizers
+transformers      # AutoTokenizer, for pretrained frontier tokenizers (hf:<id> specs)
 huggingface_hub
 tqdm
 wandb

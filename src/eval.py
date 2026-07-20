@@ -94,16 +94,21 @@ def evaluate(
     return result
 
 
-def bytes_per_token_estimate(tokenizer_path: str, val_bin_path: str, n_sample: int = 2000) -> float:
-    """Mean UTF-8 bytes per token, measured by decoding a sample of val.bin."""
-    import numpy as np
-    from tokenizers import Tokenizer
+def bytes_per_token_estimate(data_dir: str, bin_path: str, n_sample: int = 2000):
+    """Mean UTF-8 bytes per token, measured by decoding a sample of the split.
 
-    tok = Tokenizer.from_file(tokenizer_path)
-    data = np.memmap(val_bin_path, dtype=np.uint16, mode="r")
+    Returns None when the data_dir has no resolvable tokenizer, in which case
+    bits-per-byte is simply not reported.
+    """
+    from src.data.dataset import load_tokens
+    from src.data.tokenizer import resolve_data_tokenizer
+
+    tok = resolve_data_tokenizer(data_dir)
+    if tok is None:
+        return None
+    data = load_tokens(bin_path)  # reads the dtype prepare.py recorded
     sample = data[:n_sample].astype(int).tolist()
-    text = tok.decode(sample)
-    return len(text.encode("utf-8")) / len(sample)
+    return len(tok.decode(sample).encode("utf-8")) / len(sample)
 
 
 @torch.no_grad()
@@ -117,7 +122,7 @@ def sample_generations(
     model.eval()
     outputs = []
     for p in prompts:
-        ids = tokenizer.encode(p).ids
+        ids = tokenizer.encode(p)
         tokens = torch.tensor([ids], dtype=torch.long, device=device)
         gen = model.generate(tokens, max_new_tokens=max_new_tokens, temperature=0.8, top_p=0.9)
         outputs.append(tokenizer.decode(gen[0].tolist()))
@@ -164,22 +169,18 @@ def _main():
     ckpt = torch.load(ckpt_path, map_location=args.device)
     model.load_state_dict(ckpt["model"])
 
-    test_data = load_tokens(os.path.join(data_dir, "test.bin"))
-    tokenizer_path = os.path.join(data_dir, "tokenizer.json")
-    bytes_per_token = (
-        bytes_per_token_estimate(tokenizer_path, os.path.join(data_dir, "test.bin"))
-        if os.path.exists(tokenizer_path)
-        else None
-    )
+    from src.data.tokenizer import resolve_data_tokenizer
+
+    test_bin = os.path.join(data_dir, "test.bin")
+    test_data = load_tokens(test_bin)
+    bytes_per_token = bytes_per_token_estimate(data_dir, test_bin)
     n_batches = (len(test_data) - 1) // (cfg.train.batch_size * cfg.model.seq_len) + 1
     batches = eval_batches(test_data, cfg.train.batch_size, cfg.model.seq_len, n_batches, args.device)
     result = evaluate(model, batches, bytes_per_token)
 
     generations = {}
-    if os.path.exists(tokenizer_path):
-        from tokenizers import Tokenizer
-
-        tok = Tokenizer.from_file(tokenizer_path)
+    tok = resolve_data_tokenizer(data_dir)
+    if tok is not None:
         prompts = [
             "Once upon a time",
             "The little boy said",
