@@ -11,6 +11,7 @@ WORKFLOW_PLANNER.md
 /data/
 /data_b/
 checkpoints/
+wandb/
 *.bin
 *.pt
 bash.exe.stackdump

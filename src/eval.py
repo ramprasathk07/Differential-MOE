@@ -175,6 +175,21 @@ def _main():
     batches = eval_batches(test_data, cfg.train.batch_size, cfg.model.seq_len, n_batches, args.device)
     result = evaluate(model, batches, bytes_per_token)
 
+    generations = {}
+    if os.path.exists(tokenizer_path):
+        from tokenizers import Tokenizer
+
+        tok = Tokenizer.from_file(tokenizer_path)
+        prompts = [
+            "Once upon a time",
+            "The little boy said",
+            "A:\tHow are you doing",
+            "The city is known for",
+            "She looked at the",
+        ]
+        for p, out in zip(prompts, sample_generations(model, tok, prompts, max_new_tokens=60, device=args.device)):
+            generations[p] = out
+
     report = {
         "run_name": cfg.run_name,
         "checkpoint": ckpt_path,
@@ -186,6 +201,7 @@ def _main():
         "expert_entropy": result.expert_entropy,
         "expert_imbalance": result.expert_imbalance,
         "lambda_means": {i: sum(v) / len(v) for i, v in result.lambda_values.items()},
+        "sample_generations": generations,
     }
     out_path = os.path.join(args.run_dir, "final_test_eval.json")
     with open(out_path, "w") as f:

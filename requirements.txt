@@ -3,6 +3,7 @@ pyyaml
 numpy
 datasets
 tokenizers
+huggingface_hub
 tqdm
 wandb
 
