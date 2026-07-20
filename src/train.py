@@ -207,16 +207,22 @@ def main():
 
     local_rank = None
     if args.ddp:
-        backend = "nccl" if torch.cuda.is_available() else "gloo"  # gloo: CPU-only dev/test fallback
-        dist.init_process_group(backend=backend)
-        rank = dist.get_rank()
-        world_size = dist.get_world_size()
         if torch.cuda.is_available():
+            # set the device BEFORE init and tell the process group which device this
+            # rank owns -- avoids NCCL's "Guessing device ID based on global rank"
+            # warning (and the hang it warns about on heterogeneous mappings)
             local_rank = int(os.environ["LOCAL_RANK"])
             torch.cuda.set_device(local_rank)
             device = f"cuda:{local_rank}"
+            try:
+                dist.init_process_group(backend="nccl", device_id=torch.device(device))
+            except TypeError:  # torch < 2.3 has no device_id kwarg
+                dist.init_process_group(backend="nccl")
         else:
+            dist.init_process_group(backend="gloo")  # CPU-only dev/test fallback
             device = "cpu"
+        rank = dist.get_rank()
+        world_size = dist.get_world_size()
     else:
         rank = 0
         world_size = 1
@@ -280,8 +286,20 @@ def main():
         if is_main:
             print(f"resumed from {resume_path} at step {start_step}")
 
-    train_data = load_tokens(os.path.join(cfg.data_dir, "train.bin"))
-    val_data = load_tokens(os.path.join(cfg.data_dir, "val.bin"))
+    train_path = os.path.join(cfg.data_dir, "train.bin")
+    val_path = os.path.join(cfg.data_dir, "val.bin")
+    missing = [p for p in (train_path, val_path) if not os.path.exists(p)]
+    if missing:
+        raise SystemExit(
+            f"[{cfg.run_name}] tokenized data not found: {missing}\n"
+            f"data_dir is '{cfg.data_dir}'. Run the data pipeline first:\n"
+            f"  python -m src.data.train_tokenizer --vocab_size {cfg.model.vocab_size} "
+            f"--out {cfg.data_dir}/tokenizer.json --track <strict-small|strict>\n"
+            f"  python -m src.data.prepare --tokenizer {cfg.data_dir}/tokenizer.json "
+            f"--out_dir {cfg.data_dir} --track <strict-small|strict>"
+        )
+    train_data = load_tokens(train_path)
+    val_data = load_tokens(val_path)
     tokenizer_path = os.path.join(cfg.data_dir, "tokenizer.json")
     bytes_per_token = (
         bytes_per_token_estimate(tokenizer_path, os.path.join(cfg.data_dir, "val.bin"))
