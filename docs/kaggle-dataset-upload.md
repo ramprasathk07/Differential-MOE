@@ -5,14 +5,25 @@ on something a laptop does just as fast, and it has to be redone every session
 because `/kaggle/working` is wiped. Do it once locally, upload the result as a
 Kaggle Dataset, and every later session starts at the training cell.
 
-Roughly what it costs on the `strict` track (100M words) with cl100k:
+Measured on the `strict` track (100M words) with cl100k:
 
 | | |
 |---|---|
-| source text downloaded | ~700 MB |
-| `train.bin` | ~460 MB (uint32 — a frontier vocab cannot fit uint16) |
-| `val.bin` + `test.bin` | ~90 MB |
-| wall-clock | tens of minutes, CPU-bound |
+| source text downloaded | 543 MB across 6 domain files |
+| `train.bin` | 639 MB — 167.5M tokens, uint32 (a frontier vocab cannot fit uint16) |
+| `val.bin` + `test.bin` | 127 MB — 17.3M + 16.1M tokens |
+| total | **804 MB**, ~247 MB zipped |
+| wall-clock | ~13 min, CPU-bound |
+
+Note the token count: 167.5M tokens from 100M words is ~1.67 tokens/word, well
+above the ~1.15 a frontier tokenizer manages on clean prose. BabyLM's speaker
+tags (`*CHI:`, `A:`) and dialogue markers are the difference. Take the measured
+number over an estimate when sizing `max_steps` — it decides how many epochs a
+run actually does.
+
+The uint32 files compress to about a third of their size, because ids below
+100,258 leave the top two bytes of every token almost always zero. Worth
+zipping for the upload; Kaggle serves the files extracted either way.
 
 ## 1. Tokenize locally
 

@@ -185,7 +185,7 @@ NLL at all. Low priority — same leakage applies equally to all 4 runs, so the
 - Batch: tier A/B 16 × 512 × accum 8; tier S 4 × 512 × accum 32 (large-vocab
   logits memory). Both give 65K tok/step per GPU, ×2 under DDP. Grad-clip 1.0.
 - **Set `max_steps` from the corpus, not by habit.** BabyLM is small:
-  strict-small ≈ 13M tokens, strict ≈ 128M. At 131K tok/step on 2 GPUs, the
+  strict-small ≈ 13M tokens, strict ≈ 167.5M (measured under cl100k). At 131K tok/step on 2 GPUs, the
   inherited `max_steps: 7000` is 918M tokens = **72 epochs** of strict-small —
   deep in memorisation territory. Target ≈ 3–4 epochs:
   `max_steps = target_tokens ÷ (batch × seq × accum × n_gpu)`, and record the
@@ -199,7 +199,8 @@ NLL at all. Low priority — same leakage applies equally to all 4 runs, so the
   measured value before a full run.
 - Tier A (~16M): ~2–4 h/run × 4 runs = 8–16 h.
 - Tier S (~295M): 30 h ÷ 4 runs = **7.5 h/run** ⇒ ~380M tokens/run
-  (≈3.3 epochs of strict, ≈1.3 tok/param). Consumes a full week's quota.
+  (≈2.3 epochs of strict's measured 167.5M tokens, ≈1.3 tok/param). Consumes a
+  full week's quota.
 - Do not run tier A and tier S in the same week; each is a full quota.
 - Resume makes multi-session safe — but `/kaggle/working` is wiped between
   sessions, so save it as a Dataset and copy back (never train into

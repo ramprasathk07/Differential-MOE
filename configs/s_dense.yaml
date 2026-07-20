@@ -30,7 +30,9 @@ train:
   # accum_steps) only after the throughput probe confirms headroom.
   batch_size: 4
   accum_steps: 32
-  # 2900 steps x 131k tok = ~380M tokens = ~3.3 epochs of BabyLM-strict.
+  # 2900 steps x 131k tok = ~380M tokens = ~2.3 epochs of BabyLM-strict, whose
+  # train split measures 167.5M tokens under cl100k (~1.67 tok/word -- BabyLM's
+  # speaker tags and dialogue markers tokenize less efficiently than prose).
   # RECOMPUTE from the probe's measured tok/s before committing quota.
   max_steps: 2900
   lr: 2.0e-4
