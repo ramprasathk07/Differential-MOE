@@ -15,7 +15,8 @@ model:
   ffn: moe
   inter_dim: 3584
   n_dense_layers: 2
-  n_experts: 8
+  n_experts: 6             # 6 not 8 so all experts fit T4 VRAM under fp32 AdamW;
+                           # raw ~565M, active UNCHANGED. See s_moe.yaml for why.
   top_k: 2
   expert_inter_dim: 1792
   n_shared_experts: 0

@@ -1,4 +1,4 @@
-# Scale-up tier S, Run C: standard attention + MoE FFN (top-2 of 8 experts)
+# Scale-up tier S, Run C: standard attention + MoE FFN (top-2 of 6 experts)
 # Identical to s_dense except the FFN. See s_dense.yaml for data-prep notes.
 run_name: s_moe
 data_dir: data_s
@@ -15,7 +15,10 @@ model:
   ffn: moe
   inter_dim: 3584          # unused when ffn=moe; kept so configs diff cleanly
   n_dense_layers: 2
-  n_experts: 8
+  n_experts: 6             # 6 not 8: all experts live in VRAM under fp32 AdamW
+                           # (~16 B/param), and 8 -> raw 700M OOMs a 14.5 GB T4.
+                           # 6 -> raw ~565M. Active params are UNCHANGED (below),
+                           # so the dense-vs-MoE comparison stays at matched active.
   top_k: 2
   expert_inter_dim: 1792   # top_k * 1792 = 3584 -> active-param parity with dense
   n_shared_experts: 0
