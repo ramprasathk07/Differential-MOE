@@ -12,9 +12,13 @@ WORKFLOW_PLANNER.md
 /data_b/
 /data_s/
 checkpoints/
+model_checkpoints/
 wandb/
 *.bin
 *.pt
+# tokenized-corpus uploads, e.g. data_s.zip at 225 MB -- well over GitHub's
+# 100 MB per-file limit. (.gitignore has no inline comments; keep these above.)
+*.zip
 bash.exe.stackdump
 
 # Distribution / packaging
@@ -216,3 +220,5 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+docs/
+PLAN_AHEAD/

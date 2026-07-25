@@ -1,33 +1,127 @@
 # Differential-MoE
 
-A controlled ablation of Differential Attention and Mixture-of-Experts, trained from scratch on the BabyLM Challenge corpus.
+**A controlled 2×2 ablation of Differential Attention × Mixture-of-Experts, trained from scratch on the BabyLM corpus — on a free Kaggle GPU.**
 
-## Overview
+Two ideas from recent language-model research, crossed against each other at matched active-parameter cost, with every other variable held fixed. The point is a clean answer, not a large model.
 
-This project measures whether two independent architectural ideas actually help a small language model, in isolation and combined:
+- **Differential Attention** ([Ye et al., 2024](https://arxiv.org/abs/2410.05258)) — two softmax attention maps per layer, subtracted, to cancel attention noise.
+- **Mixture of Experts** — sparse top-2 routing over a bank of feed-forward experts, with a load-balance loss and router z-loss.
 
-- **Differential Attention** ([Ye et al., 2024](https://arxiv.org/abs/2410.05258)) — computes two softmax attention maps per layer and subtracts them, aiming to cancel attention noise.
-- **Mixture of Experts** — sparse top-k routing over a bank of feed-forward experts with a load-balancing auxiliary loss, activating a fraction of total parameters per token.
+| | |
+|---|---|
+| **Corpus** | [BabyLM](https://babylm.github.io/) *strict* — 167.5M train / 17.3M val / 16.1M test tokens (cl100k), 6 domains |
+| **Models** | 209M active · 379M raw · 768d × 14 layers · 100k vocab |
+| **Budget** | 2,900 steps × 65,536 tokens = 190M tokens/run · Kaggle 2×T4 |
+| **Status** | 3 of 4 runs trained and evaluated · Run B (Diff-Dense) pending |
 
-Rather than build a single large model and assert both ideas help, this repository runs a 2x2 ablation — standard vs. differential attention, crossed with dense vs. MoE feed-forward — with every other variable (tokenizer, data order, schedule, token budget) held fixed. Attention variants are parameter-matched (4·dim² per layer either way); dense and MoE variants are matched on *active* parameters per token, not total. The goal is a clean answer, not a large model.
+---
 
-Training data is the [BabyLM Challenge](https://babylm.github.io/) corpus — six domains (child-directed speech, adult conversation, literary prose, subtitles, Wikipedia, telephone dialogue) at a fixed, deliberately small word budget (10M words for the ablation tier, 100M for the headline tier), released per-domain rather than as a single undifferentiated text blob. That domain separation is why this dataset was chosen over a single-genre corpus: it gives Mixture-of-Experts routing actual heterogeneity to specialize against, which a narrow, uniform corpus would not.
+## Results
 
-Training targets a free Kaggle T4 GPU (single or dual via DDP). The same ablation runs at three scales, so the question can be asked more than once:
+Three of the four cells are trained. Every number below is measured — logged during training or produced by [`scripts/eval_all.py`](scripts/eval_all.py) re-running each checkpoint over **identical** held-out windows.
 
-| Tier | Active params | Tokenizer | Track | Configs |
+### Held-out test set
+
+Full six-domain BabyLM test split, 3,200 windows (1.64M tokens) spread evenly across it, same windows for every model, fp32.
+
+| Run | Attention | FFN | Steps | Test NLL | PPL | bits/byte | Top-1 | Raw | Active |
+|---|---|---|---|---|---|---|---|---|---|
+| A · Dense | standard | dense | 2900 | 3.052 | 21.15 | 1.131 | 0.462 | 209.2M | 209.2M |
+| **C · MoE** | standard | MoE top-2 | 2900 | **2.923** | **18.59** | **1.083** | **0.470** | 379.1M | 209.3M |
+| D · Diff-MoE | differential | MoE top-2 | 2500 ⚠️ | 2.977 | 19.62 | 1.103 | 0.469 | 379.2M | 209.3M |
+| B · Diff-Dense | differential | dense | — | *not yet run* | | | | | |
+
+⚠️ The Diff-MoE session hit a Kaggle timeout at step 2500 of 2900, so its test number comes from a run 14% shorter than the others. Step-matched comparisons below are unaffected.
+
+### Sparsity pays, consistently
+
+![Validation NLL for the three runs, step for step](assets/fig_p1_val_nll.png)
+
+At matched steps, the MoE run beat the dense baseline at **every single one of twelve checkpoints** — mean **−0.042 nats** — at identical active-parameter cost. On the full test split the gap widens to **−0.129 nats**.
+
+*(Those twelve checkpoints are autocorrelated points on one trajectory from one seed, so their spread is a consistency check, not an error bar. Test-set sampling error is quantified by `scripts/eval_uncertainty.py`; seed-to-seed variance is **not** measured anywhere in this project and is the larger unknown.)*
+
+That widening is not noise. Training-time validation reads a fixed slice that turns out to be entirely `bnc_spoken`, which is precisely the domain where MoE helps *least*:
+
+![Per-domain held-out test NLL for all three models](assets/fig_p1_domain_nll.png)
+
+| Domain | Dense | MoE | Diff-MoE | MoE − Dense |
 |---|---|---|---|---|
-| A | ~15.7M | custom 4k BPE | strict-small (10M words) | `a_dense`, `a_diff`, `a_moe`, `a_diffmoe` |
-| B | ~57M | custom 8k BPE | strict (100M words) | `b_final` |
-| S | ~295M | cl100k (frontier) | strict (100M words) | `s_dense`, `s_diff`, `s_moe`, `s_diffmoe` |
+| childes | 2.104 | **1.904** | 2.031 | **−0.200** |
+| switchboard | 2.394 | **2.367** | 2.373 | −0.027 |
+| open_subtitles | 3.577 | **3.503** | 3.503 | −0.074 |
+| simple_wiki | 3.694 | **3.569** | 3.579 | −0.125 |
+| bnc_spoken | 3.808 | **3.764** | 3.770 | −0.044 |
+| gutenberg | 3.816 | **3.741** | 3.761 | −0.075 |
 
-Each tier consumes roughly a full week of Kaggle's free quota, so they are run one at a time. Tier S is deliberately over-parameterised relative to the fixed corpus (~1.3 tokens/param, well below compute-optimal) — that is a stated property of the experiment rather than an oversight, and `docs/plan.md` covers what it does and does not license you to conclude.
+### Differential attention: a small win on steps, a clear loss on hours
 
-Full experimental design, parity methodology, metrics protocol, and risk register: [`docs/plan.md`](docs/plan.md).
+![Diff-MoE minus MoE per step, showing a crossover near step 1250](assets/fig_p1_delta.png)
 
-## Status
+Differential attention **starts as a handicap** (+0.081 nats behind at step 250), closes steadily, crosses over near **step 1250**, and ends 0.019 nats ahead at step 2250. λ needs time to settle, and the parity rule buys those λs by halving the head count — both costs are front-loaded.
 
-Architecture, training pipeline, and test suite are complete and verified (unit tests plus real smoke-trained runs, single-process and DDP). Ablation runs on Kaggle have not yet been executed. Results will be published here once available.
+Then you price it:
+
+![Validation NLL against GPU-hours instead of steps](assets/fig_p1_walltime.png)
+
+| Run | tok/s (2×T4) | vs Dense | Hours for 2,900 steps | Val NLL in a fixed 7.6 h |
+|---|---|---|---|---|
+| Dense | 6,944 | 1.00× | 7.6 h | 3.640 |
+| **MoE** | 5,250 | 0.76× | 10.1 h | **3.636** |
+| Diff-MoE | 3,851 | 0.55× | 13.7 h | 3.684 |
+
+The Diff-MoE curve sits **above both others for its entire run**. MoE wins on both axes — per step *and* per GPU-hour. Differential attention costs another 27% throughput on top of MoE's for an edge that only appears after step 1250, and disappears entirely once hours rather than steps are the budget.
+
+### Routing stayed healthy; experts did not specialize by domain
+
+Both MoE runs kept the load-balance loss pinned near its theoretical floor (12.0 for 12 MoE layers) and routing entropy at the ceiling — no expert collapse:
+
+| Run | Routing entropy (min/mean) | Load imbalance (max) | Domain specialization (max TV from uniform) |
+|---|---|---|---|
+| MoE | 0.9996 / 0.9999 | 1.066 | 0.052 |
+| Diff-MoE | 0.9992 / 0.9997 | 1.079 | 0.038 |
+
+Six domains, six experts, and **no domain routing preference in either model** — every domain spreads near-uniformly over the whole bank. The load-balance pressure that prevents collapse also suppresses specialization; `aux_loss_coef` is the knob that trades between them, and it hasn't been swept yet.
+
+Differential attention is demonstrably live — the learned λ moved at every layer, rising to 0.83 in deep layers and *falling* to 0.17 at layer 0:
+
+| layer | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| init | 0.20 | 0.36 | 0.47 | 0.56 | 0.62 | 0.67 | 0.70 | 0.73 | 0.75 | 0.76 | 0.77 | 0.78 | 0.78 | 0.79 |
+| learned | 0.17 | 0.46 | 0.69 | 0.60 | 0.65 | 0.66 | 0.70 | 0.75 | 0.82 | 0.77 | 0.83 | 0.83 | 0.76 | 0.80 |
+
+### How to read these numbers
+
+- **Single seed.** Every run is `seed=42`, once. The 0.042-nat MoE effect is consistent across twelve checkpoints and I believe it; the 0.019-nat differential effect is well inside the range a second seed could explain.
+- **Diff-MoE is 400 steps short**, and its curve was still descending and still gaining. A completed run would likely look better than what's tabled here.
+- **Undertrained on purpose.** ~1 token per parameter, roughly 15× below Chinchilla-optimal. That is BabyLM's premise, not an oversight. Validation never turned upward in any run.
+- **~200M active parameters is not 70B.** Everything here is a statement about this scale.
+
+A full narrative write-up of these results — the plan, both mechanisms in detail, and the MoE vs Diff-MoE head-to-head — is in preparation. Part 2 covers the dense pair.
+
+---
+
+## Why a 2×2
+
+A single model with every switch flipped on proves nothing, because there is nothing to subtract. So: two attention types crossed with two feed-forward types, everything else identical.
+
+| Run | Attention | FFN | The question it answers |
+|-----|-----------|-----|-------------------------|
+| A | standard | dense | the baseline |
+| B | differential | dense | does differential attention help *alone*? |
+| C | standard | MoE top-2 | does sparsity help *alone*? |
+| D | differential | MoE top-2 | do they compose? |
+
+Two parity rules make the comparison mean something, and both are enforced in code and guarded by tests:
+
+- **Attention parity** — differential attention uses *half the heads at double the width*, so both variants cost exactly `4·dim²` per layer.
+- **Active-parameter parity** — `expert_inter_dim = dense_inter ÷ top_k`, so the two experts the router runs sum to exactly the dense feed-forward they replace.
+
+That forces the distinction used everywhere in this repo: **raw** parameters (every weight in the checkpoint — sets memory) versus **active** parameters (the weights touched per token — sets FLOPs). Dense models have raw = active; these MoE models store 1.8× what they spend. Counts are generated by `src/params.py`, never computed by hand.
+
+BabyLM was chosen over a single-genre corpus precisely because it ships six *separate* domains — that heterogeneity is what gives MoE routing something real to specialize against.
+
+---
 
 ## Architecture
 
@@ -35,117 +129,105 @@ Architecture, training pipeline, and test suite are complete and verified (unit 
 |---|---|
 | Attention | `StandardAttention` (`F.scaled_dot_product_attention`) or `DifferentialAttention` — half the heads, twice the per-head width, matched parameter cost |
 | Feed-forward | Dense SwiGLU, or top-k routed MoE with Switch-style load-balance loss and router z-loss |
-| Position encoding | Rotary embeddings (RoPE), no long-context extension |
+| Position encoding | Rotary embeddings (RoPE) |
 | Normalization | RMSNorm, pre-norm residual blocks |
 | Precision | fp16 autocast + `GradScaler` (targets T4, which lacks native bf16) |
-| Tokenizer | Byte-level BPE trained on the corpus with the vocabulary size chosen by a fertility/compression sweep, or a pretrained frontier tokenizer (cl100k, Qwen, GPT-2) via an `hf:<id>` spec |
-| Data pipeline | Token stream pre-tokenized once into a memory-mapped file — `uint16`, or `uint32` once a frontier vocabulary passes 65,535; fixed-length windows, no padding |
-| Distributed training | Optional `DistributedDataParallel`, opt-in via a single flag |
+| Tokenizer | Byte-level BPE trained on the corpus with vocabulary size chosen by a fertility sweep, or a pretrained frontier tokenizer via an `hf:<id>` spec |
+| Data pipeline | Pre-tokenized once into a memory-mapped file — `uint16`, or `uint32` past 65,535; fixed-length windows, no padding |
+| Distributed | Optional `DistributedDataParallel`, one flag |
 
-Parameter counts (raw vs. active) for every config are generated by `src/params.py` — never computed by hand — since the entire point of the ablation is that active parameter count is held constant across attention and FFN variants.
+Trained geometry (768d × 14 layers, 6 experts, top-2) is smaller than the configs' headline numbers: the original `dim 896` × 16-layer × 8-expert plan OOMed a 16 GB T4, because an MoE holds *all* experts in VRAM plus fp32 AdamW state (~16 B/param). Cutting the bank 8 → 6 shrinks **raw** while leaving **active** — and therefore the parity — untouched.
+
+---
+
+## Reproduce
+
+```bash
+python -m venv venv
+source venv/bin/activate      # venv\Scripts\activate on Windows
+pip install -r requirements.txt
+```
+
+**1. Tokenize once.** The sweep reports fertility and byte-compression on held-out text, so vocabulary size is measured rather than assumed; a pretrained tokenizer skips the training step:
+
+```bash
+python -m src.data.train_tokenizer --sweep --candidates 2048 4096 8192 16384
+python -m src.data.prepare --tokenizer hf:Xenova/gpt-4 --out_dir data_s --track strict
+python -m src.data.verify --data_dir data_s --config configs/s_moe.yaml
+```
+
+**2. Check parameter counts before spending compute:**
+
+```bash
+python -m src.params --config configs/s_dense.yaml configs/s_moe.yaml configs/s_diffmoe.yaml
+```
+
+**3. Train** (re-running resumes from the last checkpoint; only the best two by validation NLL are kept, plus the latest for resume):
+
+```bash
+python -m src.train --config configs/s_moe.yaml --data_dir data_s --wandb --wandb_project diff-moe
+torchrun --standalone --nproc_per_node=2 -m src.train --config configs/s_moe.yaml --data_dir data_s --ddp
+```
+
+**4. Evaluate every finished checkpoint under one identical protocol**, including per-domain NLL and routing statistics:
+
+```bash
+python scripts/eval_all.py
+```
+
+**5. Regenerate every figure in this README:**
+
+```bash
+python scripts/pull_wandb.py            # optional: refresh W&B history
+python scripts/make_figures_part1.py
+```
+
+For the one-click Kaggle version, see `notebooks/`.
+
+---
 
 ## Project structure
 
 ```
-configs/                 The 2x2 ablation at two scales, plus a headline tier
-  a_{dense,diff,moe,diffmoe}.yaml   tier A, ~15.7M active, custom 4k BPE
-  s_{dense,diff,moe,diffmoe}.yaml   tier S, ~295M active, cl100k tokenizer
-  b_final.yaml           tier B, ~57M active, winning combination from tier A
+configs/                   the 2×2 at three scales
+  a_{dense,diff,moe,diffmoe}.yaml    tier A, ~16M active, custom 4k BPE
+  s_{dense,diff,moe,diffmoe}.yaml    tier S, cl100k tokenizer  ← the runs above
+  b_final.yaml                       tier B, ~57M active
 
 src/
   model/
-    config.py            model and training configuration (dataclasses, YAML loader)
-    attention.py          standard and differential attention
-    moe.py                gate, expert, and MoE feed-forward layer
-    block.py              transformer block
+    config.py              model + training config (dataclasses, YAML loader)
+    attention.py           standard and differential attention
+    moe.py                 gate, expert, and MoE feed-forward layer
+    block.py               transformer block
     transformer.py         full model, parameter counting
   data/
-    babylm.py              fetches the six BabyLM domain files (train/dev/test)
-    tokenizer.py           one interface over custom BPE, HF, and tiktoken backends
-    train_tokenizer.py     BPE tokenizer training and vocabulary-size sweep
-    prepare.py             tokenize the dataset into a memory-mapped binary
-    dataset.py              batch sampling from the memory-mapped file
-  train.py                training loop: AMP, gradient accumulation, checkpoint/resume, DDP, logging
-  eval.py                  validation metrics: NLL, perplexity, bits/byte, expert utilization
+    babylm.py              fetches the six BabyLM domain files
+    tokenizer.py           one interface over custom BPE, HF, and tiktoken
+    train_tokenizer.py     BPE training and vocabulary-size sweep
+    prepare.py             tokenize into a memory-mapped binary
+    verify.py              dtype / truncation / vocab-coverage checks
+    dataset.py             batch sampling from the memory-mapped file
+  train.py                 AMP, grad accumulation, checkpoint/resume, DDP, logging
+  eval.py                  NLL, perplexity, bits/byte, expert utilization, λ
   params.py                parameter count reporting
 
-tests/                     unit tests covering gradient flow, causality, parameter parity,
-                            router load balancing, single-batch overfitting, and resume correctness
+scripts/
+  eval_all.py              all checkpoints, one protocol, per-domain + routing
+  eval_uncertainty.py      per-window NLLs + paired bootstrap confidence intervals
+  eval_local.py            single checkpoint, config inferred from weight shapes
+  expert_domain.py         domain → expert routing analysis
+  pull_wandb.py            export a W&B run's full history to CSV
+  make_figures_part1.py    every figure in this README
 
-notebooks/
-  kaggle_train.ipynb       end-to-end Kaggle training notebook (single or dual T4)
+assets/                    rendered figures (embedded above)
 
-docs/
-  plan.md                  full experimental design and rationale
+tests/                     gradient flow, causality, parameter parity, router
+                           balance, single-batch overfit, resume correctness
+notebooks/                 end-to-end Kaggle training notebooks
 ```
 
-## Installation
-
-```bash
-python -m venv venv
-source venv/bin/activate   # venv\Scripts\activate on Windows
-pip install -r requirements.txt
-```
-
-## Usage
-
-**1. Choose a tokenizer.** The sweep trains several candidate vocabularies and reports fertility and byte-compression on held-out text, so the size is measured rather than assumed. Pretrained frontier tokenizers can be scored in the same table — useful for seeing what their lower fertility actually costs in embedding parameters:
-
-```bash
-python -m src.data.train_tokenizer --sweep --candidates 2048 4096 8192 16384
-python -m src.data.train_tokenizer --sweep --candidates 4096 16384 --pretrained hf:Xenova/gpt-4 hf:Qwen/Qwen2.5-0.5B
-```
-
-**2. Tokenize the dataset once.** For a custom vocabulary, train and save it first; a pretrained one needs no training step and is passed straight through:
-
-```bash
-# tier A -- custom BPE
-python -m src.data.train_tokenizer --vocab_size 4096 --out data/tokenizer.json --track strict-small
-python -m src.data.prepare --tokenizer data/tokenizer.json --out_dir data --track strict-small
-
-# tier S -- pretrained frontier tokenizer, writes uint32 + meta.json
-python -m src.data.prepare --tokenizer hf:Xenova/gpt-4 --out_dir data_s --track strict
-```
-
-**3. Inspect parameter counts before spending any compute:**
-
-```bash
-python -m src.params --config configs/s_dense.yaml configs/s_diff.yaml configs/s_moe.yaml configs/s_diffmoe.yaml
-```
-
-**4. Train a config:**
-
-```bash
-python -m src.train --config configs/s_diffmoe.yaml --data_dir data_s --wandb --wandb_project my-project
-```
-
-**5. Train on two GPUs via DistributedDataParallel:**
-
-```bash
-torchrun --standalone --nproc_per_node=2 -m src.train --config configs/s_diffmoe.yaml --data_dir data_s --ddp
-```
-
-**6. After training, evaluate once on the held-out test split:**
-
-```bash
-python -m src.eval --config configs/s_diffmoe.yaml --run_dir checkpoints/s_diffmoe
-```
-
-Re-running the same command resumes automatically from the last checkpoint. Only the best two checkpoints (by validation NLL) are retained on disk, plus the most recent one for resuming.
-
-For a guided, one-click version of the above on Kaggle's free T4 GPUs, see `notebooks/kaggle_train.ipynb`.
-
-## Metrics
-
-Every run reports, on a fixed validation slice:
-
-- Validation NLL (nats/token) and perplexity
-- Bits per byte — tokenizer-independent, the metric used for cross-run comparison
-- Token-level top-1 accuracy
-- For MoE runs: per-layer expert utilization, normalized routing entropy, load-imbalance ratio
-- For differential-attention runs: learned lambda values per layer over training
-
-Each run also writes a `report.json` on completion: configuration, exact parameter counts, tokens trained, wall-clock time, and best validation metrics — a self-contained record sufficient to reproduce or compare against any other run.
+---
 
 ## Testing
 
@@ -153,14 +235,16 @@ Each run also writes a `report.json` on completion: configuration, exact paramet
 pytest tests/
 ```
 
-The suite verifies, among other things: every parameter receives a gradient (no silently disconnected components), no attention leaks future tokens, differential and standard attention are parameter-matched, the MoE router does not collapse to a single expert, a single batch can be overfit to near-zero loss, checkpoint/resume reproduces an uninterrupted training run bit-for-bit, and token ids survive the storage round-trip at both `uint16` and `uint32` widths.
+The suite verifies: every parameter receives a gradient (no silently disconnected components), no attention leaks future tokens, differential and standard attention are parameter-matched, the MoE router does not collapse to a single expert, a single batch can be overfit to near-zero loss, checkpoint/resume reproduces an uninterrupted run, and token ids survive the storage round-trip at both `uint16` and `uint32`.
 
 Each test targets a specific failure this codebase has already had or would silently tolerate — a gradient that never arrives, a vocabulary that overflows its storage type — rather than restating what the code does.
+
+---
 
 ## References
 
 - Ye, T. et al. "Differential Transformer." 2024.
-- DeepSeek-AI. "DeepSeek-V2" and "DeepSeek-V3" technical reports — Mixture-of-Experts routing design.
+- DeepSeek-AI. "DeepSeek-V2" / "DeepSeek-V3" technical reports — MoE routing design.
 - Charpentier, L. et al. "The 2024/2025 BabyLM Challenge: Sample-Efficient Pretraining on Developmentally Plausible Corpora."
 
 ## License
