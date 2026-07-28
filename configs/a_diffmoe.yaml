@@ -1,0 +1,39 @@
+# Tier A, Run D: differential attention + MoE FFN (repo's core thesis)
+run_name: a_diffmoe
+data_dir: data
+
+model:
+  vocab_size: 4096
+  dim: 384
+  n_layers: 8
+  n_heads: 6
+  seq_len: 512
+  tie_embeddings: true
+  attention: differential
+  rope_theta: 10000.0
+  ffn: moe
+  inter_dim: 1024
+  n_dense_layers: 2
+  n_experts: 8
+  top_k: 2
+  expert_inter_dim: 512
+  n_shared_experts: 0
+  aux_loss_coef: 0.01
+  router_z_coef: 0.001
+  norm_eps: 1.0e-6
+
+train:
+  batch_size: 16
+  accum_steps: 8
+  max_steps: 7000
+  lr: 3.0e-4
+  min_lr_ratio: 0.1
+  warmup_steps: 140
+  weight_decay: 0.1
+  grad_clip: 1.0
+  amp: true
+  log_freq: 20
+  eval_freq: 500
+  eval_batches: 50
+  ckpt_freq: 500
+  seed: 42

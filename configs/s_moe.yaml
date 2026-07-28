@@ -1,0 +1,44 @@
+# Scale-up tier S, Run C: standard attention + MoE FFN (top-2 of 6 experts)
+# Identical to s_dense except the FFN. See s_dense.yaml for data-prep notes.
+run_name: s_moe
+data_dir: data_s
+
+model:
+  vocab_size: 100352
+  dim: 896
+  n_layers: 16
+  n_heads: 14
+  seq_len: 512
+  tie_embeddings: true
+  attention: standard
+  rope_theta: 10000.0
+  ffn: moe
+  inter_dim: 3584          # unused when ffn=moe; kept so configs diff cleanly
+  n_dense_layers: 2
+  n_experts: 6             # 6 not 8: all experts live in VRAM under fp32 AdamW
+                           # (~16 B/param), and 8 -> raw 700M OOMs a 14.5 GB T4.
+                           # 6 -> raw ~565M. Active params are UNCHANGED (below),
+                           # so the dense-vs-MoE comparison stays at matched active.
+  top_k: 2
+  expert_inter_dim: 1792   # top_k * 1792 = 3584 -> active-param parity with dense
+  n_shared_experts: 0
+  aux_loss_coef: 0.01
+  router_z_coef: 0.001
+  norm_eps: 1.0e-6
+
+train:
+  batch_size: 4
+  accum_steps: 32
+  max_steps: 2900
+  lr: 2.0e-4
+  min_lr_ratio: 0.1
+  warmup_steps: 60
+  weight_decay: 0.1
+  grad_clip: 1.0
+  amp: true
+  log_freq: 20
+  eval_freq: 250
+  eval_batches: 50
+  ckpt_freq: 250
+  max_best_checkpoints: 2
+  seed: 42

@@ -1,0 +1,35 @@
+# Scale-up tier S, Run B: differential attention + dense FFN
+# Identical to s_dense except `attention`. See s_dense.yaml for the data-prep
+# command and the reasoning behind vocab padding / micro-batch size.
+run_name: s_diff
+data_dir: data_s
+
+model:
+  vocab_size: 100352
+  dim: 896
+  n_layers: 16
+  n_heads: 14          # DifferentialAttention halves this to 7 heads of 2x width (4d^2 parity)
+  seq_len: 512
+  tie_embeddings: true
+  attention: differential
+  rope_theta: 10000.0
+  ffn: dense
+  inter_dim: 3584
+  norm_eps: 1.0e-6
+
+train:
+  batch_size: 4
+  accum_steps: 32
+  max_steps: 2900
+  lr: 2.0e-4
+  min_lr_ratio: 0.1
+  warmup_steps: 60
+  weight_decay: 0.1
+  grad_clip: 1.0
+  amp: true
+  log_freq: 20
+  eval_freq: 250
+  eval_batches: 50
+  ckpt_freq: 250
+  max_best_checkpoints: 2
+  seed: 42

@@ -1,0 +1,32 @@
+# Tier A, Run A: standard attention + dense FFN (baseline)
+run_name: a_dense
+data_dir: data
+
+model:
+  vocab_size: 4096
+  dim: 384
+  n_layers: 8
+  n_heads: 6
+  seq_len: 512
+  tie_embeddings: true
+  attention: standard
+  rope_theta: 10000.0
+  ffn: dense
+  inter_dim: 1024
+  norm_eps: 1.0e-6
+
+train:
+  batch_size: 16
+  accum_steps: 8
+  max_steps: 7000
+  lr: 3.0e-4
+  min_lr_ratio: 0.1
+  warmup_steps: 140
+  weight_decay: 0.1
+  grad_clip: 1.0
+  amp: true
+  log_freq: 20
+  eval_freq: 500
+  eval_batches: 50
+  ckpt_freq: 500
+  seed: 42

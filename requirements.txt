@@ -1,15 +1,12 @@
 torch>=2.1.0
 pyyaml
-tilelang
-fast-hadamard-transform
-einops
-datasets
-tiktoken
-wandb
-tqdm
 numpy
-packaging
-ninja
-tensorboard
-transformers
-accelerate
+datasets
+tokenizers
+transformers      # AutoTokenizer, for pretrained frontier tokenizers (hf:<id> specs)
+huggingface_hub
+tqdm
+wandb
+
+# dev / tests
+pytest
