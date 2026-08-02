@@ -1,0 +1,92 @@
+{
+  "n_boot": 20000,
+  "n_windows": 3200,
+  "n_domains": 6,
+  "pairs": {
+    "s_diff_minus_s_dense": {
+      "delta": -0.027901805229485033,
+      "iid": [
+        -0.030050818859133868,
+        -0.025756556286476554
+      ],
+      "stratified": [
+        -0.029924900148995223,
+        -0.02587260142108426
+      ],
+      "clustered": [
+        -0.04372155055005383,
+        -0.01563958062742468
+      ],
+      "clustered_excludes_zero": true,
+      "width_ratio_clustered_over_iid": 6.539416127331
+    },
+    "s_moe_minus_s_dense": {
+      "delta": -0.12910663116723298,
+      "iid": [
+        -0.1338278241357766,
+        -0.12439518119161949
+      ],
+      "stratified": [
+        -0.1332136632213369,
+        -0.12486801668303087
+      ],
+      "clustered": [
+        -0.1419184292840394,
+        -0.051184423369146234
+      ],
+      "clustered_excludes_zero": true,
+      "width_ratio_clustered_over_iid": 9.619149845070394
+    },
+    "s_diffmoe_minus_s_dense": {
+      "delta": -0.08838190725073218,
+      "iid": [
+        -0.0911555289104581,
+        -0.08567427011905239
+      ],
+      "stratified": [
+        -0.09099697882682084,
+        -0.08580156054720282
+      ],
+      "clustered": [
+        -0.11327657732664423,
+        -0.05703709856309943
+      ],
+      "clustered_excludes_zero": true,
+      "width_ratio_clustered_over_iid": 10.260321744290746
+    },
+    "s_diffmoe_minus_s_moe": {
+      "delta": 0.04072472391650081,
+      "iid": [
+        0.036588967422954734,
+        0.044842773588374255
+      ],
+      "stratified": [
+        0.03725079992599785,
+        0.04420606306474656
+      ],
+      "clustered": [
+        -0.016018479396540282,
+        0.05496195117675471
+      ],
+      "clustered_excludes_zero": false,
+      "width_ratio_clustered_over_iid": 8.599721043932128
+    },
+    "s_diffmoe_minus_s_diff": {
+      "delta": -0.06048010202124715,
+      "iid": [
+        -0.06264318156754597,
+        -0.05837462838413194
+      ],
+      "stratified": [
+        -0.06260330230882392,
+        -0.058414978359360256
+      ],
+      "clustered": [
+        -0.07220704317026638,
+        -0.03801151478330775
+      ],
+      "clustered_excludes_zero": true,
+      "width_ratio_clustered_over_iid": 8.011034867699289
+    }
+  }
+}

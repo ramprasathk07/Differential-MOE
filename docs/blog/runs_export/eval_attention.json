@@ -1,0 +1,626 @@
+{
+  "s_dense": {
+    "attention": "standard",
+    "n_heads_effective": 12,
+    "per_layer": [
+      {
+        "entropy": 4.7187869399785995,
+        "effective_support": 113.05740404129028,
+        "top1_mass": 0.1146749418694526,
+        "top8_mass": 0.26523682568222284,
+        "top32_mass": 0.4539340464398265,
+        "attn_distance": 121.34811854362488,
+        "negative_mass_frac": 0.0,
+        "row_sum": 1.0
+      },
+      {
+        "entropy": 5.191624701023102,
+        "effective_support": 181.81763744354248,
+        "top1_mass": 0.04997666383860633,
+        "top8_mass": 0.15183893125504255,
+        "top32_mass": 0.3365224087610841,
+        "attn_distance": 137.36238431930542,
+        "negative_mass_frac": 0.0,
+        "row_sum": 1.0
+      },
+      {
+        "entropy": 5.236619248986244,
+        "effective_support": 188.23700523376465,
+        "top1_mass": 0.040458293340634555,
+        "top8_mass": 0.14869890920817852,
+        "top32_mass": 0.3444007374346256,
+        "attn_distance": 133.6383490562439,
+        "negative_mass_frac": 0.0,
+        "row_sum": 1.0
+      },
+      {
+        "entropy": 4.955435693264008,
+        "effective_support": 142.15982103347778,
+        "top1_mass": 0.07709033321589231,
+        "top8_mass": 0.21926323836669326,
+        "top32_mass": 0.42749687749892473,
+        "attn_distance": 115.4472086429596,
+        "negative_mass_frac": 0.0,
+        "row_sum": 1.0
+      },
+      {
+        "entropy": 4.7563634514808655,
+        "effective_support": 117.97510552406311,
+        "top1_mass": 0.10432897158898413,
+        "top8_mass": 0.2676225476898253,
+        "top32_mass": 0.48313944414258003,
+        "attn_distance": 102.20364141464233,
+        "negative_mass_frac": 0.0,
+        "row_sum": 1.0
+      },
+      {
+        "entropy": 4.44078703224659,
+        "effective_support": 86.1007354259491,
+        "top1_mass": 0.1429341034963727,
+        "top8_mass": 0.3531974861398339,
+        "top32_mass": 0.565124299377203,
+        "attn_distance": 90.33154773712158,
+        "negative_mass_frac": 0.0,
+        "row_sum": 1.0
+      },
+      {
+        "entropy": 3.5827836766839027,
+        "effective_support": 37.85825335979462,
+        "top1_mass": 0.2725553261116147,
+        "top8_mass": 0.5312326736748219,
+        "top32_mass": 0.7163261063396931,
+        "attn_distance": 57.00478005409241,
+        "negative_mass_frac": 0.0,
+        "row_sum": 1.0
+      },
+      {
+        "entropy": 4.354329377412796,
+        "effective_support": 78.69585287570953,
+        "top1_mass": 0.1533322895411402,
+        "top8_mass": 0.37109590508043766,
+        "top32_mass": 0.5870624650269747,
+        "attn_distance": 86.15542769432068,
+        "negative_mass_frac": 0.0,
+        "row_sum": 1.0
+      },
+      {
+        "entropy": 4.043745972216129,
+        "effective_support": 57.47420370578766,
+        "top1_mass": 0.20815700246021152,
+        "top8_mass": 0.4349227221682668,
+        "top32_mass": 0.6289660409092903,
+        "attn_distance": 75.91906952857971,
+        "negative_mass_frac": 0.0,
+        "row_sum": 1.0
+      },
+      {
+        "entropy": 3.954963654279709,
+        "effective_support": 53.72240233421326,
+        "top1_mass": 0.21062369970604777,
+        "top8_mass": 0.45747138373553753,
+        "top32_mass": 0.6601760741323233,
+        "attn_distance": 74.68300426006317,
+        "negative_mass_frac": 0.0,
+        "row_sum": 1.0
+      },
+      {
+        "entropy": 3.7665247544646263,
+        "effective_support": 43.547250270843506,
+        "top1_mass": 0.22877737879753113,
+        "top8_mass": 0.49763440899550915,
+        "top32_mass": 0.7076033223420382,
+        "attn_distance": 73.72625601291656,
+        "negative_mass_frac": 0.0,
+        "row_sum": 1.0
+      },
+      {
+        "entropy": 3.523970127105713,
+        "effective_support": 34.46939021348953,
+        "top1_mass": 0.27744584204629064,
+        "top8_mass": 0.5484038442373276,
+        "top32_mass": 0.7289116643369198,
+        "attn_distance": 66.48119986057281,
+        "negative_mass_frac": 0.0,
+        "row_sum": 1.0
+      },
+      {
+        "entropy": 3.7674670293927193,
+        "effective_support": 43.60410249233246,
+        "top1_mass": 0.24511225847527385,
+        "top8_mass": 0.49249031115323305,
+        "top32_mass": 0.6739344615489244,
+        "attn_distance": 71.9506528377533,
+        "negative_mass_frac": 0.0,
+        "row_sum": 1.0
+      },
+      {
+        "entropy": 3.3196147605776787,
+        "effective_support": 28.28504765033722,
+        "top1_mass": 0.3140021157450974,
+        "top8_mass": 0.5821750545874238,
+        "top32_mass": 0.7496982533484697,
+        "attn_distance": 53.84224736690521,
+        "negative_mass_frac": 0.0,
+        "row_sum": 1.0
+      }
+    ],
+    "overall": {
+      "entropy": 4.258072601365192,
+      "effective_support": 86.21458654318538,
+      "top1_mass": 0.17424780144522498,
+      "top8_mass": 0.3800917315695967,
+      "top32_mass": 0.5759497286884913,
+      "attn_distance": 90.00670623779297,
+      "negative_mass_frac": 0.0,
+      "row_sum": 1.0
+    }
+  },
+  "s_diff": {
+    "attention": "differential",
+    "n_heads_effective": 6,
+    "per_layer": [
+      {
+        "entropy": 4.185844033956528,
+        "effective_support": 65.97941040992737,
+        "top1_mass": 0.21892667748034,
+        "top8_mass": 0.3797012912109494,
+        "top32_mass": 0.5784057974815369,
+        "attn_distance": 98.2891411781311,
+        "negative_mass_frac": 0.08308689226396382,
+        "row_sum": 0.8903278112411499
+      },
+      {
+        "entropy": 2.686461679637432,
+        "effective_support": 14.720861166715622,
+        "top1_mass": 0.433535385876894,
+        "top8_mass": 0.7530986443161964,
+        "top32_mass": 0.8669838793575764,
+        "attn_distance": 25.814299166202545,
+        "negative_mass_frac": 0.2977145556360483,
+        "row_sum": 0.45887675881385803
+      },
+      {
+        "entropy": 3.5021617636084557,
+        "effective_support": 33.30532902479172,
+        "top1_mass": 0.24919149046763778,
+        "top8_mass": 0.5913684703409672,
+        "top32_mass": 0.7955308705568314,
+        "attn_distance": 54.09488141536713,
+        "negative_mass_frac": 0.2761578122153878,
+        "row_sum": 0.4282854199409485
+      },
+      {
+        "entropy": 4.3800573498010635,
+        "effective_support": 80.00949692726135,
+        "top1_mass": 0.1454036624636501,
+        "top8_mass": 0.37783456314355135,
+        "top32_mass": 0.6156377885490656,
+        "attn_distance": 78.45791888237,
+        "negative_mass_frac": 0.2583857970312238,
+        "row_sum": 0.40913814306259155
+      },
+      {
+        "entropy": 4.637698128819466,
+        "effective_support": 103.67461013793945,
+        "top1_mass": 0.11931914184242487,
+        "top8_mass": 0.30334967374801636,
+        "top32_mass": 0.5314826602116227,
+        "attn_distance": 100.19503235816956,
+        "negative_mass_frac": 0.2990141538903117,
+        "row_sum": 0.3141755759716034
+      },
+      {
+        "entropy": 4.836450219154358,
+        "effective_support": 126.3646969795227,
+        "top1_mass": 0.08497966604772955,
+        "top8_mass": 0.25120101729407907,
+        "top32_mass": 0.48543083295226097,
+        "attn_distance": 109.79983854293823,
+        "negative_mass_frac": 0.34145803563296795,
+        "row_sum": 0.2270561009645462
+      },
+      {
+        "entropy": 4.3665134608745575,
+        "effective_support": 79.81241965293884,
+        "top1_mass": 0.1625401556957513,
+        "top8_mass": 0.37580150831490755,
+        "top32_mass": 0.5936481691896915,
+        "attn_distance": 87.74470090866089,
+        "negative_mass_frac": 0.34628850501030684,
+        "row_sum": 0.25748011469841003
+      },
+      {
+        "entropy": 4.354882478713989,
+        "effective_support": 79.7586133480072,
+        "top1_mass": 0.1572432084940374,
+        "top8_mass": 0.3838181346654892,
+        "top32_mass": 0.6022520493716002,
+        "attn_distance": 87.21765446662903,
+        "negative_mass_frac": 0.3165255729109049,
+        "row_sum": 0.3020250201225281
+      },
+      {
+        "entropy": 4.567096948623657,
+        "effective_support": 97.21980619430542,
+        "top1_mass": 0.11786734964698553,
+        "top8_mass": 0.33268793765455484,
+        "top32_mass": 0.5709440428763628,
+        "attn_distance": 94.79182195663452,
+        "negative_mass_frac": 0.3531465716660023,
+        "row_sum": 0.22925648046657443
+      },
+      {
+        "entropy": 4.52164426445961,
+        "effective_support": 92.80415225028992,
+        "top1_mass": 0.12270141742192209,
+        "top8_mass": 0.33768290001899004,
+        "top32_mass": 0.5697263274341822,
+        "attn_distance": 91.43380498886108,
+        "negative_mass_frac": 0.35856815706938505,
+        "row_sum": 0.21731406450271606
+      },
+      {
+        "entropy": 3.8075219988822937,
+        "effective_support": 46.61472535133362,
+        "top1_mass": 0.23919844534248114,
+        "top8_mass": 0.5124351466074586,
+        "top32_mass": 0.7037451900541782,
+        "attn_distance": 62.913959980010986,
+        "negative_mass_frac": 0.3417609632015228,
+        "row_sum": 0.2826797068119049
+      },
+      {
+        "entropy": 4.007611744105816,
+        "effective_support": 55.95993411540985,
+        "top1_mass": 0.20442015584558249,
+        "top8_mass": 0.4686252595856786,
+        "top32_mass": 0.675488980486989,
+        "attn_distance": 69.75694632530212,
+        "negative_mass_frac": 0.35571419540792704,
+        "row_sum": 0.2518610656261444
+      },
+      {
+        "entropy": 4.156299725174904,
+        "effective_support": 64.19935667514801,
+        "top1_mass": 0.18418522644788027,
+        "top8_mass": 0.4406385449692607,
+        "top32_mass": 0.6484852228313684,
+        "attn_distance": 72.00413537025452,
+        "negative_mass_frac": 0.38205715641379356,
+        "row_sum": 0.2082474371418357
+      },
+      {
+        "entropy": 3.934057891368866,
+        "effective_support": 51.24472463130951,
+        "top1_mass": 0.2290035686455667,
+        "top8_mass": 0.48651624750345945,
+        "top32_mass": 0.6804051250219345,
+        "attn_distance": 68.22672951221466,
+        "negative_mass_frac": 0.3660226287320256,
+        "row_sum": 0.2568660378456116
+      }
+    ],
+    "overall": {
+      "entropy": 4.1388786919415,
+      "effective_support": 70.8334383474929,
+      "top1_mass": 0.19060825369420595,
+      "top8_mass": 0.4281970956695399,
+      "top32_mass": 0.6370119240268001,
+      "attn_distance": 78.62434750369617,
+      "negative_mass_frac": 0.31256435693441226,
+      "row_sum": 0.33811355265788734
+    }
+  },
+  "s_moe": {
+    "attention": "standard",
+    "n_heads_effective": 12,
+    "per_layer": [
+      {
+        "entropy": 5.1158521473407745,
+        "effective_support": 169.15442156791687,
+        "top1_mass": 0.05297892080852762,
+        "top8_mass": 0.1709580433089286,
+        "top32_mass": 0.3729647593572736,
+        "attn_distance": 136.4163908958435,
+        "negative_mass_frac": 0.0,
+        "row_sum": 1.0
+      },
+      {
+        "entropy": 5.312987685203552,
+        "effective_support": 203.31594276428223,
+        "top1_mass": 0.030236223828978837,
+        "top8_mass": 0.12806900357827544,
+        "top32_mass": 0.3160734176635742,
+        "attn_distance": 140.1642713546753,
+        "negative_mass_frac": 0.0,
+        "row_sum": 1.0
+      },
+      {
+        "entropy": 5.055946543812752,
+        "effective_support": 157.11823225021362,
+        "top1_mass": 0.055321683175861835,
+        "top8_mass": 0.1966689508408308,
+        "top32_mass": 0.41472228337079287,
+        "attn_distance": 116.89279174804688,
+        "negative_mass_frac": 0.0,
+        "row_sum": 1.0
+      },
+      {
+        "entropy": 4.0538724809885025,
+        "effective_support": 58.3668053150177,
+        "top1_mass": 0.1802807287313044,
+        "top8_mass": 0.44834988191723824,
+        "top32_mass": 0.6808689031749964,
+        "attn_distance": 58.507821440696716,
+        "negative_mass_frac": 0.0,
+        "row_sum": 1.0
+      },
+      {
+        "entropy": 3.4042229056358337,
+        "effective_support": 30.275161921977997,
+        "top1_mass": 0.2846020609140396,
+        "top8_mass": 0.5789057593792677,
+        "top32_mass": 0.7690385915338993,
+        "attn_distance": 48.31163704395294,
+        "negative_mass_frac": 0.0,
+        "row_sum": 1.0
+      },
+      {
+        "entropy": 3.5528135374188423,
+        "effective_support": 35.261027336120605,
+        "top1_mass": 0.2667621369473636,
+        "top8_mass": 0.5488520190119743,
+        "top32_mass": 0.7390240114182234,
+        "attn_distance": 55.084909200668335,
+        "negative_mass_frac": 0.0,
+        "row_sum": 1.0
+      },
+      {
+        "entropy": 3.169622465968132,
+        "effective_support": 23.984776616096497,
+        "top1_mass": 0.33092186879366636,
+        "top8_mass": 0.6147720478475094,
+        "top32_mass": 0.7863354738801718,
+        "attn_distance": 46.17172658443451,
+        "negative_mass_frac": 0.0,
+        "row_sum": 1.0
+      },
+      {
+        "entropy": 3.4970558434724808,
+        "effective_support": 33.39550203084946,
+        "top1_mass": 0.2687446568161249,
+        "top8_mass": 0.5572705548256636,
+        "top32_mass": 0.7516428809612989,
+        "attn_distance": 63.432300448417664,
+        "negative_mass_frac": 0.0,
+        "row_sum": 1.0
+      },
+      {
+        "entropy": 3.8732646703720093,
+        "effective_support": 48.62816345691681,
+        "top1_mass": 0.2084917165338993,
+        "top8_mass": 0.48168022744357586,
+        "top32_mass": 0.6957163512706757,
+        "attn_distance": 79.87924098968506,
+        "negative_mass_frac": 0.0,
+        "row_sum": 1.0
+      },
+      {
+        "entropy": 3.9633757025003433,
+        "effective_support": 53.51347529888153,
+        "top1_mass": 0.2056963760405779,
+        "top8_mass": 0.4540437599644065,
+        "top32_mass": 0.6581873949617147,
+        "attn_distance": 76.28911685943604,
+        "negative_mass_frac": 0.0,
+        "row_sum": 1.0
+      },
+      {
+        "entropy": 4.260895356535912,
+        "effective_support": 71.24368453025818,
+        "top1_mass": 0.1631916332989931,
+        "top8_mass": 0.3881730902940035,
+        "top32_mass": 0.598027789965272,
+        "attn_distance": 89.99116659164429,
+        "negative_mass_frac": 0.0,
+        "row_sum": 1.0
+      },
+      {
+        "entropy": 3.908591203391552,
+        "effective_support": 50.24812090396881,
+        "top1_mass": 0.22268851520493627,
+        "top8_mass": 0.4604479717090726,
+        "top32_mass": 0.6502938605844975,
+        "attn_distance": 75.09914922714233,
+        "negative_mass_frac": 0.0,
+        "row_sum": 1.0
+      },
+      {
+        "entropy": 3.9937848821282387,
+        "effective_support": 54.40143966674805,
+        "top1_mass": 0.20509209483861923,
+        "top8_mass": 0.4466171767562628,
+        "top32_mass": 0.6485961694270372,
+        "attn_distance": 74.3544487953186,
+        "negative_mass_frac": 0.0,
+        "row_sum": 1.0
+      },
+      {
+        "entropy": 4.226668655872345,
+        "effective_support": 68.99821865558624,
+        "top1_mass": 0.17857724567875266,
+        "top8_mass": 0.39555404521524906,
+        "top32_mass": 0.5908828917890787,
+        "attn_distance": 86.80915069580078,
+        "negative_mass_frac": 0.0,
+        "row_sum": 1.0
+      }
+    ],
+    "overall": {
+      "entropy": 4.099211005760091,
+      "effective_support": 75.56464087963104,
+      "top1_mass": 0.18954184725797468,
+      "top8_mass": 0.4193116094351613,
+      "top32_mass": 0.6194553413827505,
+      "attn_distance": 81.95743727684021,
+      "negative_mass_frac": 0.0,
+      "row_sum": 1.0
+    }
+  },
+  "s_diffmoe": {
+    "attention": "differential",
+    "n_heads_effective": 6,
+    "per_layer": [
+      {
+        "entropy": 4.3140367567539215,
+        "effective_support": 74.93598449230194,
+        "top1_mass": 0.19584762444719672,
+        "top8_mass": 0.3503443757072091,
+        "top32_mass": 0.5506261270493269,
+        "attn_distance": 103.25157642364502,
+        "negative_mass_frac": 0.05504236929118633,
+        "row_sum": 0.8403158783912659
+      },
+      {
+        "entropy": 3.689998224377632,
+        "effective_support": 40.11420178413391,
+        "top1_mass": 0.2499067997559905,
+        "top8_mass": 0.5326570980250835,
+        "top32_mass": 0.7335599008947611,
+        "attn_distance": 53.214314699172974,
+        "negative_mass_frac": 0.20281864749267697,
+        "row_sum": 0.5660885572433472
+      },
+      {
+        "entropy": 3.310711108148098,
+        "effective_support": 27.778095543384552,
+        "top1_mass": 0.31150049809366465,
+        "top8_mass": 0.6305749695748091,
+        "top32_mass": 0.8016560804098845,
+        "attn_distance": 37.065266132354736,
+        "negative_mass_frac": 0.3381197638809681,
+        "row_sum": 0.33358990773558617
+      },
+      {
+        "entropy": 3.0899584144353867,
+        "effective_support": 22.021732091903687,
+        "top1_mass": 0.3538282625377178,
+        "top8_mass": 0.6682287435978651,
+        "top32_mass": 0.8227459322661161,
+        "attn_distance": 38.16100573539734,
+        "negative_mass_frac": 0.3048511976376176,
+        "row_sum": 0.4069584608078003
+      },
+      {
+        "entropy": 3.3841565027832985,
+        "effective_support": 29.872654497623444,
+        "top1_mass": 0.3049246743321419,
+        "top8_mass": 0.5935922507196665,
+        "top32_mass": 0.7700658924877644,
+        "attn_distance": 46.847387075424194,
+        "negative_mass_frac": 0.30468602385371923,
+        "row_sum": 0.38456713780760765
+      },
+      {
+        "entropy": 3.2355270385742188,
+        "effective_support": 25.537068247795105,
+        "top1_mass": 0.3265299629420042,
+        "top8_mass": 0.6343117188662291,
+        "top32_mass": 0.7988160662353039,
+        "attn_distance": 46.1158093214035,
+        "negative_mass_frac": 0.33695057686418295,
+        "row_sum": 0.35018831491470337
+      },
+      {
+        "entropy": 4.090587362647057,
+        "effective_support": 60.11294364929199,
+        "top1_mass": 0.17389615718275309,
+        "top8_mass": 0.4530948158353567,
+        "top32_mass": 0.690936878323555,
+        "attn_distance": 83.86110830307007,
+        "negative_mass_frac": 0.34710976760834455,
+        "row_sum": 0.3044094443321228
+      },
+      {
+        "entropy": 4.374747470021248,
+        "effective_support": 79.9112343788147,
+        "top1_mass": 0.13932925835251808,
+        "top8_mass": 0.3812188310548663,
+        "top32_mass": 0.6208028811961412,
+        "attn_distance": 78.98218584060669,
+        "negative_mass_frac": 0.3530568238347769,
+        "row_sum": 0.25723138451576233
+      },
+      {
+        "entropy": 3.9643622413277626,
+        "effective_support": 53.57370400428772,
+        "top1_mass": 0.20249004010111094,
+        "top8_mass": 0.4810668649151921,
+        "top32_mass": 0.6945286858826876,
+        "attn_distance": 66.16515457630157,
+        "negative_mass_frac": 0.39348715730011463,
+        "row_sum": 0.1911301463842392
+      },
+      {
+        "entropy": 4.11242488771677,
+        "effective_support": 61.637505412101746,
+        "top1_mass": 0.17765031475573778,
+        "top8_mass": 0.4439298352226615,
+        "top32_mass": 0.6613743621855974,
+        "attn_distance": 71.09857511520386,
+        "negative_mass_frac": 0.35272250790148973,
+        "row_sum": 0.25211212038993835
+      },
+      {
+        "entropy": 4.357309862971306,
+        "effective_support": 78.43135571479797,
+        "top1_mass": 0.15268104104325175,
+        "top8_mass": 0.3945312472060323,
+        "top32_mass": 0.6181072816252708,
+        "attn_distance": 78.76592707633972,
+        "negative_mass_frac": 0.39960520900785923,
+        "row_sum": 0.17255811393260956
+      },
+      {
+        "entropy": 3.9541497081518173,
+        "effective_support": 52.22338259220123,
+        "top1_mass": 0.21436590608209372,
+        "top8_mass": 0.48565519973635674,
+        "top32_mass": 0.6871455423533916,
+        "attn_distance": 65.90707314014435,
+        "negative_mass_frac": 0.40762163046747446,
+        "row_sum": 0.15785169415175915
+      },
+      {
+        "entropy": 3.8466115444898605,
+        "effective_support": 47.06903159618378,
+        "top1_mass": 0.2284837607294321,
+        "top8_mass": 0.5056264335289598,
+        "top32_mass": 0.6978038214147091,
+        "attn_distance": 62.579010128974915,
+        "negative_mass_frac": 0.35694187320768833,
+        "row_sum": 0.2551378011703491
+      },
+      {
+        "entropy": 3.913101576268673,
+        "effective_support": 50.19060206413269,
+        "top1_mass": 0.25280927307903767,
+        "top8_mass": 0.4850652711465955,
+        "top32_mass": 0.6581959147006273,
+        "attn_distance": 72.85545539855957,
+        "negative_mass_frac": 0.3790510995313525,
+        "row_sum": 0.22875113785266876
+      }
+    ],
+    "overall": {
+      "entropy": 3.831263049904789,
+      "effective_support": 50.243535433496746,
+      "top1_mass": 0.23458882667390363,
+      "top8_mass": 0.5028498325097773,
+      "top32_mass": 0.7004546690732241,
+      "attn_distance": 64.63356064047132,
+      "negative_mass_frac": 0.32371890341996085,
+      "row_sum": 0.33577786425926853
+    }
+  }
+}

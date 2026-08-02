@@ -1,10 +1,11 @@
-"""Render the Part 1 figures: dense vs MoE vs Diff-MoE, side by side.
+"""Render the Part 1 figures: the four cells of the 2x2, side by side.
 
-Reads the three runs' logged histories (no transcription, no smoothing):
+Reads each run's logged history (no transcription, no smoothing):
 
   model_checkpoints/checkpoints/s_dense/metrics.csv     local, 2900 steps
+  model_checkpoints/checkpoints/s_diff/metrics.csv      local, 2900 steps
   model_checkpoints/checkpoints/s_moe/metrics.csv       local, 2900 steps
-  docs/blog/runs_export/s_diffmoe/wandb_history.csv     W&B, crashed at 2480
+  docs/blog/runs_export/s_diffmoe_v2/wandb_history.csv  W&B, 2900 steps
 
 plus docs/blog/runs_export/eval_comparison.json (written by scripts/eval_all.py)
 for the held-out test figures. PNGs land in the repo-root assets/, which the
@@ -61,6 +62,9 @@ plt.rcParams.update({
 HERE = os.path.dirname(os.path.abspath(__file__))   # scripts/
 ROOT = os.path.dirname(HERE)                        # repo root
 OUT = os.path.join(ROOT, "assets")                  # published: README embeds these
+BLOG_OUT = os.path.join(ROOT, "docs/blog/assets")   # blogs use RELATIVE assets/ links,
+#                                                     which resolve here -- mirror every
+#                                                     figure or the blogs show stale PNGs
 CK = os.path.join(ROOT, "model_checkpoints/checkpoints")
 EXPORT = os.path.join(ROOT, "docs/blog/runs_export")  # local artifacts, not published
 os.makedirs(OUT, exist_ok=True)
@@ -107,16 +111,34 @@ def source(fig, text=SOURCE):
     fig.text(0.008, 0.012, text, color=MUTED, fontsize=8.5, ha="left")
 
 
+def save(fig, fname):
+    """Write to the published assets dir AND mirror into docs/blog/assets, which
+    is where the blogs' relative image links actually point."""
+    fig.savefig(os.path.join(OUT, fname))
+    os.makedirs(BLOG_OUT, exist_ok=True)
+    import shutil
+    shutil.copy2(os.path.join(OUT, fname), os.path.join(BLOG_OUT, fname))
+
+
 # ---- load the three histories ----------------------------------------------
 def load_curves():
     """Local metrics.csv where the run dir came back from Kaggle; the W&B export
-    otherwise (s_diffmoe crashed before its metrics.csv was saved). A run with
+    otherwise (neither s_diffmoe session wrote a metrics.csv back). A run with
     neither is simply absent from every figure."""
     curves = {}
     for run in RUNS:
         local = os.path.join(CK, run, "metrics.csv")
-        wandb = os.path.join(EXPORT, run, "wandb_history.csv")
-        if os.path.exists(local):
+        # a rerun exported as <run>_v2 supersedes both the local metrics of the
+        # old checkpoint and the old W&B export (s_diffmoe's first session
+        # crashed at 2500 AND ran on a contended T4 -- the v2 run is the one
+        # every figure should show)
+        v2 = os.path.join(EXPORT, run + "_v2", "wandb_history.csv")
+        if os.path.exists(v2):
+            local = ""            # force the v2 branch below
+            wandb = v2
+        else:
+            wandb = os.path.join(EXPORT, run, "wandb_history.csv")
+        if local and os.path.exists(local):
             df = pd.read_csv(local)
             cols = ("step", "train_loss", "val_nll", "tok_per_sec")
         elif os.path.exists(wandb):
@@ -151,7 +173,10 @@ def fig_val_nll():
         v = C[run]["val"]
         ax.plot(v.step, v.nll, "-", lw=2, color=meta["color"], label=meta["label"], zorder=3)
         ax.plot(v.step, v.nll, "o", ms=5, color=meta["color"], mec=SURFACE, mew=1.5, zorder=4)
-    dy = {"s_dense": 7, "s_moe": -2, "s_diffmoe": -18}   # Diff-MoE ends early; clear the MoE curve
+    # all four now end at step 2900 within 0.06 nats -- fan the labels out
+    # vertically in the same top-to-bottom order as the endpoints. The whole fan
+    # is biased upward so the lowest label clears the x tick labels underneath.
+    dy = {"s_dense": 30, "s_diff": 23, "s_moe": 11, "s_diffmoe": 2}
     for run, meta in RUNS.items():
         if run not in C:
             continue
@@ -159,16 +184,19 @@ def fig_val_nll():
         endlabel(ax, v.step.iloc[-1], v.nll.iloc[-1],
                  f"{meta['label']}  {v.nll.iloc[-1]:.3f}", meta["color"], dx=16,
                  dy=dy.get(run, 0))
-    titles(ax, "Validation NLL: the three runs, step for step",
+    titles(ax, "Validation NLL: the four cells, step for step",
            "Lower is better. Measured every 250 steps on the identical held-out slice.")
     ax.set_xlabel("optimizer step")
     ax.set_ylabel("validation NLL (nats/token)")
-    ax.set_xlim(0, 3560)
-    ax.xaxis.set_major_locator(MultipleLocator(500))
+    # the four direct labels sit to the right of step 2900 and are ~700 steps
+    # wide in data units; the limit leaves room for them, the explicit ticks stop
+    # at the last real step so no axis label appears underneath one
+    ax.set_xlim(0, 3750)
+    ax.set_xticks(range(0, 3001, 500))
     ax.legend(frameon=False, loc="upper right", labelcolor=SECOND, fontsize=10.5)
     source(fig)
     fig.tight_layout(rect=[0, 0.03, 1, 1])
-    fig.savefig(os.path.join(OUT, "fig_p1_val_nll.png"))
+    save(fig, "fig_p1_val_nll.png")
     plt.close(fig)
     print("wrote fig_p1_val_nll.png")
 
@@ -207,9 +235,65 @@ def fig_delta(baseline="s_moe", others=("s_diffmoe",), fname="fig_p1_delta.png",
     ax.legend(frameon=False, loc="upper right", labelcolor=SECOND, fontsize=10.5)
     source(fig)
     fig.tight_layout(rect=[0, 0.03, 1, 1])
-    fig.savefig(os.path.join(OUT, fname))
+    save(fig, fname)
     plt.close(fig)
     print("wrote", fname)
+
+
+# ---- fig 2b: the interaction term -- do the two mechanisms compose? ---------
+def fig_interaction():
+    """The point of running a 2x2 rather than three separate comparisons: with
+    all four cells you can ask whether stacking two mechanisms delivers the sum
+    of what each delivers alone. The dashed line is that additive prediction;
+    the gap between it and the observed Diff-MoE curve is the interaction."""
+    need = ("s_dense", "s_diff", "s_moe", "s_diffmoe")
+    if any(r not in C for r in need):
+        print("skip interaction: needs all four cells, have", list(C))
+        return
+    base_ = C["s_dense"]["val"].set_index("step")["nll"]
+    d_diff = C["s_diff"]["val"].set_index("step")["nll"] - base_
+    d_moe = C["s_moe"]["val"].set_index("step")["nll"] - base_
+    d_both = C["s_diffmoe"]["val"].set_index("step")["nll"] - base_
+    steps = d_both.dropna().index.intersection(d_diff.index).intersection(d_moe.index)
+    additive = (d_diff.loc[steps] + d_moe.loc[steps])
+
+    fig, ax = plt.subplots(figsize=(9.4, 5.4))
+    base(ax)
+    ax.axhline(0, color=AXIS, lw=1.4, zorder=2)
+    ax.text(60, 0.003, "dense baseline", color=MUTED, fontsize=9.5, va="bottom")
+
+    for run, series in (("s_diff", d_diff), ("s_moe", d_moe), ("s_diffmoe", d_both)):
+        s = series.loc[steps]
+        ax.plot(steps, s.values, "-", lw=2, color=RUNS[run]["color"],
+                label=f"{RUNS[run]['label']} − Dense", zorder=3)
+        ax.plot(steps, s.values, "o", ms=5, color=RUNS[run]["color"],
+                mec=SURFACE, mew=1.5, zorder=4)
+    # the prediction is not an entity, so it wears neutral ink, not a series hue
+    ax.plot(steps, additive.values, "--", lw=2, color=MUTED, zorder=3,
+            label="additive prediction (sum of the two alone)")
+
+    gap = d_both.loc[steps].iloc[-1] - additive.iloc[-1]
+    x_end = steps[-1]
+    ax.annotate("", xy=(x_end, d_both.loc[steps].iloc[-1]), xytext=(x_end, additive.iloc[-1]),
+                arrowprops=dict(arrowstyle="<->", color=INK, lw=1.3))
+    ax.annotate(f"shortfall {gap:+.3f}", (x_end, (d_both.loc[steps].iloc[-1] + additive.iloc[-1]) / 2),
+                textcoords="offset points", xytext=(12, 0), color=INK,
+                fontsize=10.5, fontweight="600", va="center")
+
+    titles(ax, "Do the two mechanisms compose?",
+           "Each mechanism's gain over dense, and what stacking them actually delivers "
+           "versus the sum of the parts.")
+    ax.set_xlabel("optimizer step")
+    ax.set_ylabel("Δ validation NLL vs dense (nats)")
+    # room for the shortfall callout, which hangs off the last point
+    ax.set_xlim(0, 3500)
+    ax.set_xticks(range(0, 3001, 500))
+    ax.legend(frameon=False, loc="lower left", labelcolor=SECOND, fontsize=10)
+    source(fig)
+    fig.tight_layout(rect=[0, 0.03, 1, 1])
+    save(fig, "fig_p1_interaction.png")
+    plt.close(fig)
+    print("wrote fig_p1_interaction.png")
 
 
 # ---- fig 3: the same curves against GPU-hours, not steps --------------------
@@ -224,25 +308,28 @@ def fig_walltime():
         ax.plot(hours, v.nll, "-", lw=2, color=meta["color"],
                 label=f"{meta['label']}  ({C[run]['tok_s']:,.0f} tok/s)", zorder=3)
         ax.plot(hours, v.nll, "o", ms=5, color=meta["color"], mec=SURFACE, mew=1.5, zorder=4)
-    # the three runs end within ~3 h of each other -> stagger the labels vertically
-    dy = {"s_dense": 10, "s_moe": -14, "s_diffmoe": 10}
+    # All four finish within ~3 h and ~0.04 nats of each other, so endpoint labels
+    # would overplot each other and the neighbouring curves. The legend already
+    # carries name + throughput; a marker alone is enough to find each end.
     for run, meta in RUNS.items():
         if run not in C:
             continue
         v = C[run]["val"]
         hours = v.step * TOK_PER_STEP / C[run]["tok_s"] / 3600
-        endlabel(ax, hours.iloc[-1], v.nll.iloc[-1], meta["label"],
-                 meta["color"], dx=14, dy=dy.get(run, 0))
-    titles(ax, "The same three runs, priced in GPU-hours",
+        ax.plot([hours.iloc[-1]], [v.nll.iloc[-1]], "o", ms=8, color=meta["color"],
+                mec=SURFACE, mew=2, zorder=5)
+    titles(ax, "The same four runs, priced in GPU-hours",
            "Step-for-step is not what a free-tier budget buys. This is quality per hour of 2×T4.")
     ax.set_xlabel("GPU-hours (2×T4, from each run's measured throughput)")
     ax.set_ylabel("validation NLL (nats/token)")
-    ax.set_xlim(0, 17.5)
+    # the slowest run finishes at 10.3 h; anything beyond ~11 is dead space that
+    # flattens every curve and hides the gaps this figure exists to show
+    ax.set_xlim(0, 11)
     ax.xaxis.set_major_locator(MultipleLocator(2))
     ax.legend(frameon=False, loc="upper right", labelcolor=SECOND, fontsize=10.5)
     source(fig)
     fig.tight_layout(rect=[0, 0.03, 1, 1])
-    fig.savefig(os.path.join(OUT, "fig_p1_walltime.png"))
+    save(fig, "fig_p1_walltime.png")
     plt.close(fig)
     print("wrote fig_p1_walltime.png")
 
@@ -256,29 +343,28 @@ def fig_train_loss():
             continue
         t = C[run]["train"]
         ax.plot(t.step, t.loss, "-", lw=2, color=meta["color"], label=meta["label"], zorder=3)
-    # Diff-MoE stops ~420 steps short, so its label would land on top of the other
-    # two -- place it back along its own line instead of out to the right.
-    place = {"s_dense": (16, 8, "left"), "s_moe": (16, -8, "left"),
-             "s_diffmoe": (-12, 16, "right")}
+    # All four end at 2900 in two tight pairs (dense/diff-dense ~2.71, the two
+    # MoE cells ~2.64), and 0.009 nats is ~1pt of vertical space -- so the labels
+    # are fanned apart by hand, in the same top-to-bottom order as the endpoints.
+    dy = {"s_dense": 20, "s_diff": 6, "s_diffmoe": -8, "s_moe": -22}
     for run, meta in RUNS.items():
         if run not in C:
             continue
         t = C[run]["train"]
-        dx, dy, ha = place.get(run, (16, 0, "left"))
         endlabel(ax, t.step.iloc[-1], t.loss.iloc[-1],
                  f"{meta['label']}  {t.loss.iloc[-1]:.3f}", meta["color"],
-                 dx=dx, dy=dy, ha=ha)
+                 dx=16, dy=dy.get(run, 0))
     titles(ax, "Training cross-entropy",
-           "Every logged step, unsmoothed. All three fall the way they should; the gaps are small and real.")
+           "Every logged step, unsmoothed. All four fall the way they should; the gaps are small and real.")
     ax.set_xlabel("optimizer step")
     ax.set_ylabel("training loss (nats/token)")
-    ax.set_xlim(0, 3560)
+    ax.set_xlim(0, 3750)
     ax.set_ylim(2.4, 5.0)
-    ax.xaxis.set_major_locator(MultipleLocator(500))
+    ax.set_xticks(range(0, 3001, 500))
     ax.legend(frameon=False, loc="upper right", labelcolor=SECOND, fontsize=10.5)
     source(fig)
     fig.tight_layout(rect=[0, 0.03, 1, 1])
-    fig.savefig(os.path.join(OUT, "fig_p1_train_loss.png"))
+    save(fig, "fig_p1_train_loss.png")
     plt.close(fig)
     print("wrote fig_p1_train_loss.png")
 
@@ -315,7 +401,7 @@ def fig_domain():
     ax.set_yticklabels(order, color=SECOND)
     ax.invert_yaxis()
     titles(ax, "The six BabyLM domains are not equally hard",
-           "Held-out test NLL per domain, identical windows for all three models. Lower is better.")
+           "Held-out test NLL per domain, identical windows for every model. Lower is better.")
     ax.set_xlabel("test NLL (nats/token)")
     # domains are sorted easiest-first and the y-axis is inverted, so the top-right
     # of the plot is empty -- the only place a legend does not sit on a bar
@@ -323,19 +409,99 @@ def fig_domain():
     ax.legend(frameon=False, loc="upper right", labelcolor=SECOND, fontsize=10.5)
     source(fig, "source: scripts/eval_all.py · held-out BabyLM test split · RTX 3060, fp32")
     fig.tight_layout(rect=[0, 0.03, 1, 1])
-    fig.savefig(os.path.join(OUT, "fig_p1_domain_nll.png"))
+    save(fig, "fig_p1_domain_nll.png")
     plt.close(fig)
     print("wrote fig_p1_domain_nll.png")
+
+
+# ---- fig 6: does the advantage grow with context position? ------------------
+def fig_position():
+    """The sharpest available test of differential attention's actual claim.
+    If the mechanism cancels attention that leaks onto irrelevant context, its
+    benefit must ACCUMULATE with context -- i.e. grow with position index. A
+    capacity mechanism like MoE has no such reason to, which makes this a
+    discriminating measurement rather than a descriptive one."""
+    p = os.path.join(EXPORT, "eval_deep.json")
+    if not os.path.exists(p):
+        print("skip position: no eval_deep.json (run scripts/eval_deep.py)")
+        return
+    with open(p) as f:
+        deep = json.load(f)
+    if "s_dense" not in deep:
+        print("skip position: no dense baseline in eval_deep.json")
+        return
+    dense_pos = np.array(deep["s_dense"]["pos_bucket_nll"])
+    n = len(dense_pos)
+    pos = np.arange(n) * (512 // n) + (512 // n) // 2
+
+    # Two panels because the difference view alone can only show three series --
+    # dense IS the zero line there, which reads as a missing model. The left panel
+    # puts all four on an absolute axis; the right panel is the comparison that
+    # actually tests the mechanism.
+    fig, (axA, axB) = plt.subplots(1, 2, figsize=(13.2, 5.6))
+    for ax in (axA, axB):
+        base(ax)
+        ax.set_xlim(0, 512)
+        ax.xaxis.set_major_locator(MultipleLocator(128))
+        ax.set_xlabel("position in context window (token index)")
+
+    # ---- panel A: absolute NLL, all four cells --------------------------------
+    for run, meta in RUNS.items():
+        if run not in deep:
+            continue
+        p = np.array(deep[run]["pos_bucket_nll"])
+        axA.plot(pos, p, "-", lw=2, color=meta["color"], label=meta["label"], zorder=3)
+        axA.plot(pos, p, "o", ms=3.5, color=meta["color"], mec=SURFACE, mew=1, zorder=4)
+    axA.set_ylabel("held-out NLL (nats/token)")
+    axA.set_title("All four cells, absolute", color=INK, fontsize=12,
+                  fontweight="600", loc="left", pad=10)
+    axA.legend(frameon=False, loc="upper right", labelcolor=SECOND, fontsize=10)
+
+    # ---- panel B: the same data as a difference against dense -----------------
+    # dense is drawn explicitly as its own flat zero line, in its own hue, so the
+    # baseline is a labelled series rather than an unexplained axis rule
+    axB.plot(pos, np.zeros_like(pos, dtype=float), "-", lw=2, color=RUNS["s_dense"]["color"],
+             zorder=3, label="Dense — baseline")
+    for run in ("s_moe", "s_diffmoe", "s_diff"):
+        if run not in deep:
+            continue
+        d = np.array(deep[run]["pos_bucket_nll"]) - dense_pos
+        r = np.corrcoef(pos, d)[0, 1]
+        axB.plot(pos, d, "-", lw=2, color=RUNS[run]["color"], zorder=3,
+                 label=f"{RUNS[run]['label']} − Dense   (r = {r:+.2f})")
+        axB.plot(pos, d, "o", ms=3.5, color=RUNS[run]["color"], mec=SURFACE, mew=1, zorder=4)
+    axB.set_ylabel("Δ NLL vs dense (nats)")
+    axB.set_title("Difference against the dense baseline", color=INK, fontsize=12,
+                  fontweight="600", loc="left", pad=10)
+    # every curve is at or below the baseline past position ~64, so the band just
+    # under the title is the only region no series crosses
+    axB.set_ylim(top=0.062)
+    axB.legend(frameon=False, loc="upper right", labelcolor=SECOND, fontsize=10,
+               ncol=2, columnspacing=1.4, handlelength=1.6)
+
+    fig.suptitle("Differential attention's advantage grows with context; MoE's barely does",
+                 color=INK, fontsize=14, fontweight="600", x=0.006, ha="left", y=0.985)
+    fig.text(0.006, 0.928,
+             "Held-out NLL resolved by position in the 512-token window. Every model saw "
+             "identical windows. Lower is better; below zero beats dense.",
+             color=SECOND, fontsize=10.5, ha="left")
+    source(fig, "source: scripts/eval_deep.py · 1,600 held-out windows · identical windows per model")
+    fig.tight_layout(rect=[0, 0.03, 1, 0.90])
+    save(fig, "fig_p2_position.png")
+    plt.close(fig)
+    print("wrote fig_p2_position.png")
 
 
 if __name__ == "__main__":
     fig_val_nll()
     fig_delta()                       # Part 1's pairing: Diff-MoE vs MoE
-    fig_delta(baseline="s_dense", others=("s_moe", "s_diffmoe"),
+    fig_delta(baseline="s_dense", others=("s_diff", "s_moe", "s_diffmoe"),
               fname="fig_p1_delta_vs_dense.png",
               title="How much each mechanism buys over a plain dense transformer",
               subtitle=("Validation NLL minus the dense run at the same step, "
                         "at identical active-parameter cost. Below zero = better than dense."))
+    fig_interaction()
     fig_walltime()
     fig_train_loss()
     fig_domain()
+    fig_position()

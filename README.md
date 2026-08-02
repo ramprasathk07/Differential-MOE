@@ -1,251 +1,267 @@
 # Differential-MoE
 
-**A controlled 2×2 ablation of Differential Attention × Mixture-of-Experts, trained from scratch on the BabyLM corpus — on a free Kaggle GPU.**
+**Do two of the most-hyped transformer tricks — Differential Attention and Mixture-of-Experts — actually earn their place in a language model? A controlled 2×2 ablation, trained from scratch, on a free Kaggle GPU.**
 
-Two ideas from recent language-model research, crossed against each other at matched active-parameter cost, with every other variable held fixed. The point is a clean answer, not a large model.
-
-- **Differential Attention** ([Ye et al., 2024](https://arxiv.org/abs/2410.05258)) — two softmax attention maps per layer, subtracted, to cancel attention noise.
-- **Mixture of Experts** — sparse top-2 routing over a bank of feed-forward experts, with a load-balance loss and router z-loss.
+Most architecture claims are demos: one model, every switch on, no baseline. This project is the opposite — four models that differ in *exactly one thing at a time*, at matched compute, on identical data, so every difference is attributable. Then the mechanisms are opened up and checked directly: not just *does* it help, but *does it help for the reason its paper claims*.
 
 | | |
 |---|---|
-| **Corpus** | [BabyLM](https://babylm.github.io/) *strict* — 167.5M train / 17.3M val / 16.1M test tokens (cl100k), 6 domains |
-| **Models** | 209M active · 379M raw · 768d × 14 layers · 100k vocab |
-| **Budget** | 2,900 steps × 65,536 tokens = 190M tokens/run · Kaggle 2×T4 |
-| **Status** | 3 of 4 runs trained and evaluated · Run B (Diff-Dense) pending |
+| **The grid** | {standard, differential} attention × {dense, MoE} feed-forward |
+| **Scale** | 209M active params · 768d × 14 layers · [BabyLM](https://babylm.github.io/) corpus, 190M tokens/run |
+| **Hardware** | trained on Kaggle's free 2×T4 · evaluated on one RTX 3060 |
+| **Everything held fixed** | seed, data order, LR schedule, token budget, eval windows — byte-identical |
+
+![Validation NLL for the four cells](assets/fig_p1_val_nll.png)
+
+## Findings in 30 seconds
+
+1. **Sparsity wins biggest.** MoE beats the dense baseline by **−0.129 nats** on held-out test at identical active compute — better on **96% of individual test windows**, in all six corpus domains.
+2. **Differential attention works, and it's nearly free.** −0.028 nats over dense for a **3.9% throughput cost**. It's the best use of a fixed GPU-hour budget of all four models.
+3. **It works for the claimed reason** — verified, not assumed. Its advantage is ~zero at the start of a sequence and **grows with context position** (r = −0.88); its learned λ almost perfectly controls how much attention mass goes *negative* (r ≈ 0.98) — the one thing an ordinary softmax cannot do.
+4. **Stacking both buys less than the sum — and one domain explains why.** Combining them recovers only **56%** of the two individual gains on held-out test. Diff-MoE beats plain MoE on **5 of 6 domains**; its entire deficit is child-directed speech, and 400 extra training steps barely moved it, so it is **architectural, not undertraining**. Resample *domains* rather than windows and that deficit crosses zero — it is a fact about this corpus mixture, not an architecture-level verdict.
+5. **The ranking flips with the axis you measure on.** Best per step: Diff-MoE. Best per GPU-hour: Diff-Dense. Best absolute test NLL: MoE. *No single number answers "which architecture is best" — that's the point.*
+
+**The honest caveat:** every cell is one seed. Test-set sampling error is ruled out (19–63σ, paired bootstrap), but seed-to-seed variance is unmeasured — so treat small differences as strong hints, not laws.
 
 ---
 
-## Results
+## The 2×2 at a glance
 
-Three of the four cells are trained. Every number below is measured — logged during training or produced by [`scripts/eval_all.py`](scripts/eval_all.py) re-running each checkpoint over **identical** held-out windows.
+| Run | Attention | FFN | The question it answers | Val NLL (2900 steps) | Test NLL |
+|-----|-----------|-----|-------------------------|---------|---------|
+| A | standard | dense | baseline | 3.640 | 3.052 |
+| B | differential | dense | does diff-attn help *alone*? | 3.610 | **3.024** |
+| C | standard | MoE top-2 | does sparsity help *alone*? | 3.599 | **2.923** |
+| D | differential | MoE top-2 | do they *compose*? | **3.582** | 2.963 |
 
-### Held-out test set
+All four cells are complete 2,900-step runs, evaluated on byte-identical held-out windows.
 
-Full six-domain BabyLM test split, 3,200 windows (1.64M tokens) spread evenly across it, same windows for every model, fp32.
+**Fairness is enforced in code and guarded by tests, not asserted:** differential attention runs half the heads at double width (both variants cost exactly `4·dim²`/layer), and each expert's width is `dense_inter ÷ top_k` so the two routed experts sum exactly to the dense FFN they replace. Models B–D differ from A by **0.01–0.04%** in active parameters.
 
-| Run | Attention | FFN | Steps | Test NLL | PPL | bits/byte | Top-1 | Raw | Active |
-|---|---|---|---|---|---|---|---|---|---|
-| A · Dense | standard | dense | 2900 | 3.052 | 21.15 | 1.131 | 0.462 | 209.2M | 209.2M |
-| **C · MoE** | standard | MoE top-2 | 2900 | **2.923** | **18.59** | **1.083** | **0.470** | 379.1M | 209.3M |
-| D · Diff-MoE | differential | MoE top-2 | 2500 ⚠️ | 2.977 | 19.62 | 1.103 | 0.469 | 379.2M | 209.3M |
-| B · Diff-Dense | differential | dense | — | *not yet run* | | | | | |
+---
 
-⚠️ The Diff-MoE session hit a Kaggle timeout at step 2500 of 2900, so its test number comes from a run 14% shorter than the others. Step-matched comparisons below are unaffected.
+## The three headline plots
 
-### Sparsity pays, consistently
+**Cost, priced honestly.** Iso-step comparisons hide the bill. Same curves against GPU-hours:
 
-![Validation NLL for the three runs, step for step](assets/fig_p1_val_nll.png)
+![The four runs priced in GPU-hours](assets/fig_p1_walltime.png)
 
-At matched steps, the MoE run beat the dense baseline at **every single one of twelve checkpoints** — mean **−0.042 nats** — at identical active-parameter cost. On the full test split the gap widens to **−0.129 nats**.
-
-*(Those twelve checkpoints are autocorrelated points on one trajectory from one seed, so their spread is a consistency check, not an error bar. Test-set sampling error is quantified by `scripts/eval_uncertainty.py`; seed-to-seed variance is **not** measured anywhere in this project and is the larger unknown.)*
-
-That widening is not noise. Training-time validation reads a fixed slice that turns out to be entirely `bnc_spoken`, which is precisely the domain where MoE helps *least*:
-
-![Per-domain held-out test NLL for all three models](assets/fig_p1_domain_nll.png)
-
-| Domain | Dense | MoE | Diff-MoE | MoE − Dense |
-|---|---|---|---|---|
-| childes | 2.104 | **1.904** | 2.031 | **−0.200** |
-| switchboard | 2.394 | **2.367** | 2.373 | −0.027 |
-| open_subtitles | 3.577 | **3.503** | 3.503 | −0.074 |
-| simple_wiki | 3.694 | **3.569** | 3.579 | −0.125 |
-| bnc_spoken | 3.808 | **3.764** | 3.770 | −0.044 |
-| gutenberg | 3.816 | **3.741** | 3.761 | −0.075 |
-
-### Differential attention: a small win on steps, a clear loss on hours
-
-![Diff-MoE minus MoE per step, showing a crossover near step 1250](assets/fig_p1_delta.png)
-
-Differential attention **starts as a handicap** (+0.081 nats behind at step 250), closes steadily, crosses over near **step 1250**, and ends 0.019 nats ahead at step 2250. λ needs time to settle, and the parity rule buys those λs by halving the head count — both costs are front-loaded.
-
-Then you price it:
-
-![Validation NLL against GPU-hours instead of steps](assets/fig_p1_walltime.png)
-
-| Run | tok/s (2×T4) | vs Dense | Hours for 2,900 steps | Val NLL in a fixed 7.6 h |
-|---|---|---|---|---|
-| Dense | 6,944 | 1.00× | 7.6 h | 3.640 |
-| **MoE** | 5,250 | 0.76× | 10.1 h | **3.636** |
-| Diff-MoE | 3,851 | 0.55× | 13.7 h | 3.684 |
-
-The Diff-MoE curve sits **above both others for its entire run**. MoE wins on both axes — per step *and* per GPU-hour. Differential attention costs another 27% throughput on top of MoE's for an edge that only appears after step 1250, and disappears entirely once hours rather than steps are the budget.
-
-### Routing stayed healthy; experts did not specialize by domain
-
-Both MoE runs kept the load-balance loss pinned near its theoretical floor (12.0 for 12 MoE layers) and routing entropy at the ceiling — no expert collapse:
-
-| Run | Routing entropy (min/mean) | Load imbalance (max) | Domain specialization (max TV from uniform) |
+| In a fixed 7.6 GPU-h | Val NLL | | tok/s |
 |---|---|---|---|
-| MoE | 0.9996 / 0.9999 | 1.066 | 0.052 |
-| Diff-MoE | 0.9992 / 0.9997 | 1.079 | 0.038 |
+| **Diff-Dense** | **3.613** | ← best on a time budget | 6,674 |
+| Diff-MoE | 3.620 | | 5,139 |
+| MoE | 3.636 | | 5,250 |
+| Dense | 3.640 | | 6,944 |
 
-Six domains, six experts, and **no domain routing preference in either model** — every domain spreads near-uniformly over the whole bank. The load-balance pressure that prevents collapse also suppresses specialization; `aux_loss_coef` is the knob that trades between them, and it hasn't been swept yet.
+**The mechanism, verified.** Differential attention's advantage over dense is ~zero at position 0 and grows across the context window — exactly what a noise-cancelling mechanism must do, and not what a capacity mechanism (MoE, orange) does. Left panel is all four cells in absolute terms; right panel is the same data measured against dense:
 
-Differential attention is demonstrably live — the learned λ moved at every layer, rising to 0.83 in deep layers and *falling* to 0.17 at layer 0:
+![NLL advantage by position in the context window](assets/fig_p2_position.png)
 
-| layer | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| init | 0.20 | 0.36 | 0.47 | 0.56 | 0.62 | 0.67 | 0.70 | 0.73 | 0.75 | 0.76 | 0.77 | 0.78 | 0.78 | 0.79 |
-| learned | 0.17 | 0.46 | 0.69 | 0.60 | 0.65 | 0.66 | 0.70 | 0.75 | 0.82 | 0.77 | 0.83 | 0.83 | 0.76 | 0.80 |
+**The two mechanisms fix different text — and that is why they stack badly.** MoE's gain concentrates on repetitive child-directed speech; diff-attn's on topic-switching, reference-dense text. Their per-domain gain profiles correlate at only **r = 0.21**:
 
-### How to read these numbers
+![Per-domain held-out test NLL](assets/fig_p1_domain_nll.png)
 
-- **Single seed.** Every run is `seed=42`, once. The 0.042-nat MoE effect is consistent across twelve checkpoints and I believe it; the 0.019-nat differential effect is well inside the range a second seed could explain.
-- **Diff-MoE is 400 steps short**, and its curve was still descending and still gaining. A completed run would likely look better than what's tabled here.
-- **Undertrained on purpose.** ~1 token per parameter, roughly 15× below Chinchilla-optimal. That is BabyLM's premise, not an oversight. Validation never turned upward in any run.
-- **~200M active parameters is not 70B.** Everything here is a statement about this scale.
+| Domain | Dense | Diff-Dense | MoE | Diff-MoE | MoE − Dense | Diff-MoE − MoE |
+|---|---|---|---|---|---|---|
+| childes | 2.104 | 2.090 | **1.904** | 2.027 | **−0.200** | **+0.123** ✗ |
+| switchboard | 2.394 | 2.388 | 2.367 | **2.363** | −0.027 | −0.004 ✓ |
+| open_subtitles | 3.577 | 3.539 | 3.503 | **3.493** | −0.074 | −0.010 ✓ |
+| simple_wiki | 3.694 | 3.635 | 3.569 | **3.547** | −0.125 | **−0.022** ✓ |
+| bnc_spoken | 3.808 | 3.786 | 3.764 | **3.754** | −0.044 | −0.010 ✓ |
+| gutenberg | 3.816 | 3.801 | 3.741 | **3.737** | −0.075 | −0.004 ✓ |
 
-A full narrative write-up of these results — the plan, both mechanisms in detail, and the MoE vs Diff-MoE head-to-head — is in preparation. Part 2 covers the dense pair.
-
----
-
-## Why a 2×2
-
-A single model with every switch flipped on proves nothing, because there is nothing to subtract. So: two attention types crossed with two feed-forward types, everything else identical.
-
-| Run | Attention | FFN | The question it answers |
-|-----|-----------|-----|-------------------------|
-| A | standard | dense | the baseline |
-| B | differential | dense | does differential attention help *alone*? |
-| C | standard | MoE top-2 | does sparsity help *alone*? |
-| D | differential | MoE top-2 | do they compose? |
-
-Two parity rules make the comparison mean something, and both are enforced in code and guarded by tests:
-
-- **Attention parity** — differential attention uses *half the heads at double the width*, so both variants cost exactly `4·dim²` per layer.
-- **Active-parameter parity** — `expert_inter_dim = dense_inter ÷ top_k`, so the two experts the router runs sum to exactly the dense feed-forward they replace.
-
-That forces the distinction used everywhere in this repo: **raw** parameters (every weight in the checkpoint — sets memory) versus **active** parameters (the weights touched per token — sets FLOPs). Dense models have raw = active; these MoE models store 1.8× what they spend. Counts are generated by `src/params.py`, never computed by hand.
-
-BabyLM was chosen over a single-genre corpus precisely because it ships six *separate* domains — that heterogeneity is what gives MoE routing something real to specialize against.
+Read the last column: **Diff-MoE beats plain MoE on five of six domains**, then gives all of it back and more on CHILDES — which is 40% of the test set. Finishing the crashed run moved that gap by only 0.004 (+0.127 → +0.123), which **rules out undertraining as the explanation**. Differential attention genuinely costs something on short, repetitive, locally-predictable text: there is no attention noise worth cancelling over a three-word context, and the frequency-decile data shows it trading common-token fluency for rare-token accuracy.
 
 ---
 
-## Architecture
+<details>
+<summary><b>📊 Full results & statistics</b> — paired bootstrap CIs, win rates, domain-clustered intervals</summary>
+
+**Why these metrics, in one paragraph.** **NLL** (nats/token) is the training objective itself — differences in it are additive and comparable, which is why every statistical test here runs on NLL. **Perplexity** is just `exp(NLL)`, read as "how many equally-likely next tokens is the model effectively choosing between" — intuitive, but exponential, so it exaggerates (a 4.2% NLL gain shows up as 12.1% perplexity). **bits/byte** normalises by raw UTF-8 bytes instead of tokens, making it the only number here that stays valid across different tokenizers — and it is literally a compression rate: 1.131 → 1.083 means the archive is 4.2% smaller. **Top-1** is how often the single best guess is exactly right, roughly an autocomplete acceptance rate; MoE's +0.8pp is about one extra correct token per 122. **Win rate** — the share of individual windows a model wins — is the one that changes rollout decisions: a 96% win rate is safe to ship, a 69% win rate means one document in three gets *worse* while your average looks green. [Part 3](docs/blog/part3-what-we-measured-and-why.md) covers all six evaluation passes and what each would mean in production.
+
+### Held-out test (3,200 identical windows, 1.64M tokens, fp32)
+
+| Run | Test NLL | PPL | bits/byte | Top-1 | Raw / Active params |
+|---|---|---|---|---|---|
+| Dense | 3.052 | 21.15 | 1.131 | 0.462 | 209.2M / 209.2M |
+| Diff-Dense | 3.024 | 20.57 | 1.120 | 0.466 | 209.2M / 209.2M |
+| **MoE** | **2.923** | **18.59** | **1.083** | **0.470** | 379.1M / 209.3M |
+| Diff-MoE | 2.963 | 19.36 | 1.098 | **0.471** | 379.2M / 209.3M |
+
+### Paired bootstrap (20,000 resamples; identical windows make every comparison paired)
+
+| Comparison | Δ test NLL | iid 95% CI | domain-clustered 95% CI | Windows won |
+|---|---|---|---|---|
+| MoE − Dense | −0.129 | [−0.134, −0.124] | [−0.142, −0.051] | **96.0%** |
+| Diff-Dense − Dense | −0.028 | [−0.030, −0.026] | [−0.044, −0.016] | **69.2%** |
+| Diff-MoE − Dense | −0.088 | [−0.091, −0.086] | [−0.113, −0.057] | **95.1%** |
+| Diff-MoE − Diff-Dense | −0.060 | [−0.063, −0.058] | [−0.072, −0.038] | **91.0%** |
+| Diff-MoE − MoE | +0.041 | [+0.037, +0.045] | [**−0.016**, +0.055] | 47.7% |
+
+All five rows are the completed 2,900-step checkpoints.
+
+Three things these rows teach:
+
+- **The iid intervals are 19–63σ from zero** — test-set size limits nothing here. The only unmeasured noise source is the seed.
+- **Windows aren't exchangeable** — they share domains. Resampling the *domains* widens every interval 6.5–10.3×, and one comparison does not survive it: **Diff-MoE − MoE crosses zero** once domains rather than windows are the unit, because that gap lives almost entirely in CHILDES (40% of test windows). So "plain MoE beats Diff-MoE" is a claim about *this domain mixture*, not a claim that would survive reweighting the corpus. An error bar is only as honest as its exchangeability assumption.
+- **Win rate separates two kinds of improvement.** MoE wins 96% of windows (broad shift); diff-attn wins 69% — worse on one window in three, its mean carried by big wins on a minority. Frequency-decile analysis shows why: diff-attn trades common-token fluency for rare-token accuracy.
+
+### BLiMP (grammatical competence, 67k minimal pairs, chance 50%)
+
+| Dense | Diff-Dense | MoE | Diff-MoE |
+|---|---|---|---|
+| 70.50% | 70.62% | **71.39%** | 71.14% |
+
+The perplexity ranking transfers exactly to grammar (r = −0.99 with test NLL — all four models order identically on both). MoE's +0.9pp is real; differential attention's +0.1pp overall is noise — but by field it gains **+3.1pp on semantics** while giving back 1.3pp on syntax, the third independent measurement concentrating its value where meaning depends on distant context.
+
+### Interaction: do they compose?
+
+Two views, and the disagreement between them is the interesting part.
+
+| | MoE alone | diff-attn alone | additive prediction | combined actual | recovered |
+|---|---|---|---|---|---|
+| **Validation** (step 2900) | −0.041 | −0.029 | −0.070 | −0.058 | **82%** |
+| **Held-out test** | −0.129 | −0.028 | −0.157 | −0.088 | **56%** |
+
+Test is far more sub-additive than validation — because the validation slice is BNC-only, and **the entire interaction shortfall lives in CHILDES**, a domain validation never sees. See the per-domain table above.
+
+![Do the two mechanisms compose?](assets/fig_p1_interaction.png)
+
+</details>
+
+<details>
+<summary><b>🔬 Mechanism deep-dive</b> — attention matrices recomputed, λ analysis, negative mass</summary>
+
+The fused attention kernel never materialises attention weights, so both attention forwards were reimplemented to capture them ([`scripts/eval_attention.py`](scripts/eval_attention.py)), verified against the originals to 5×10⁻⁷. Shannon entropy is undefined on differential rows (signed, sum to 1−λ), so spread is measured on normalised magnitudes.
+
+| Model | Effective support (positions/row) | Top-8 mass | **Negative attention mass** |
+|---|---|---|---|
+| Dense | 86.2 | 0.380 | 0 |
+| Diff-Dense | **70.8** | 0.428 | **31.3%** |
+| MoE | 75.6 | 0.419 | 0 |
+| Diff-MoE | **50.2** | 0.503 | **32.4%** |
+
+The full causal chain, each link measured independently:
+
+> λ learned per layer → controls negative attention mass (**r = +0.98/+0.99** across 14 layers) → attention sharpens (−18% effective support) → advantage grows with context position (**r = −0.88**).
+
+λ itself: kept the paper's increasing-with-depth shape but pushed layer 0 down to 0.11 (init 0.20) — and the two differential models converged on nearly the same profile (r = 0.92) despite entirely different feed-forwards underneath.
+
+**Controls that limit the claim:** MoE with ordinary softmax *also* sharpened (75.6 vs 86.2) — sharpening is a property of better models here, not of this mechanism; only the negative mass is uniquely differential. And sharpness does not predict quality (r = +0.45 with test NLL, and the sharpest model of the four is not the best).
+
+Routing stayed healthy in both MoE cells (per-domain entropy ≥ 0.996, no collapse) and experts did **not** specialize by domain (max TV from uniform 0.052) — the load-balance loss suppresses exactly the specialization the six-domain corpus invites. `aux_loss_coef` is the unswept knob.
+
+</details>
+
+<details>
+<summary><b>⚠️ How to read these numbers</b> — the caveats, stated rather than buried</summary>
+
+- **One seed per cell** (`seed=42`). Sampling error is solved; seed variance is not measured. This is the binding constraint on every small difference here — and an earlier conclusion of this project reversed when a second measurement of the same quantity arrived.
+- **A long-context mechanism at 512 tokens.** Diff-attn's advantage is still growing at position 500 with no flattening — extrapolation says longer contexts help more, but that's a prediction, not a result.
+- **The head-count confound.** Parity buys λ by halving heads; "differential attention" here means "subtraction minus half the patterns." One deliberately parity-breaking run would separate them.
+- **Throughput lesson learned twice.** Diff-attn initially measured as costing 27% inside the MoE — a rerun on a healthy Kaggle session showed 2%, matching the dense pair's 3.9%. The first session ran on contended hardware. A cost measured once is a property of that setup, not the mechanism.
+- **One LR for four architectures; training-time validation was a single domain** (fixed slice = BNC only — comparisons stayed fair, but checkpoint selection saw one domain).
+- **~15× under Chinchilla-optimal on purpose** (BabyLM's premise). No run ever overfit; rankings at 1.1 epochs need not hold at 5.
+- **209M params is not 70B.** Everything here is a statement about this scale.
+
+</details>
+
+<details>
+<summary><b>🏗️ Architecture & implementation</b></summary>
 
 | Component | Design |
 |---|---|
-| Attention | `StandardAttention` (`F.scaled_dot_product_attention`) or `DifferentialAttention` — half the heads, twice the per-head width, matched parameter cost |
-| Feed-forward | Dense SwiGLU, or top-k routed MoE with Switch-style load-balance loss and router z-loss |
-| Position encoding | Rotary embeddings (RoPE) |
-| Normalization | RMSNorm, pre-norm residual blocks |
-| Precision | fp16 autocast + `GradScaler` (targets T4, which lacks native bf16) |
-| Tokenizer | Byte-level BPE trained on the corpus with vocabulary size chosen by a fertility sweep, or a pretrained frontier tokenizer via an `hf:<id>` spec |
-| Data pipeline | Pre-tokenized once into a memory-mapped file — `uint16`, or `uint32` past 65,535; fixed-length windows, no padding |
-| Distributed | Optional `DistributedDataParallel`, one flag |
+| Attention | `StandardAttention` (SDPA) or `DifferentialAttention` — half heads, double width, matched cost |
+| Feed-forward | Dense SwiGLU, or top-k routed MoE + Switch-style load-balance loss + router z-loss |
+| Positions / Norm | RoPE · RMSNorm pre-norm |
+| Precision | fp16 AMP + GradScaler (T4 has no bf16); router softmax and λ in fp32 |
+| Tokenizer | cl100k via `hf:` spec (tier S) or custom byte-BPE with fertility-swept vocab (tier A/B) |
+| Data | six BabyLM domains packed into one memmapped token stream, 512-token windows, no padding |
+| Distributed | optional DDP, one flag |
 
-Trained geometry (768d × 14 layers, 6 experts, top-2) is smaller than the configs' headline numbers: the original `dim 896` × 16-layer × 8-expert plan OOMed a 16 GB T4, because an MoE holds *all* experts in VRAM plus fp32 AdamW state (~16 B/param). Cutting the bank 8 → 6 shrinks **raw** while leaving **active** — and therefore the parity — untouched.
+Geometry was tuned at runtime on Kaggle (dim 896→768, 8→6 experts) to fit T4 VRAM — an MoE holds *all* experts plus fp32 AdamW state (~16 B/param). Evaluation therefore reconstructs each model's config **from checkpoint tensor shapes**, not from YAML.
 
----
+</details>
 
-## Reproduce
+<details>
+<summary><b>▶️ Reproduce</b> — data prep, training, the full evaluation battery</summary>
 
 ```bash
-python -m venv venv
-source venv/bin/activate      # venv\Scripts\activate on Windows
+python -m venv venv && source venv/bin/activate   # venv\Scripts\activate on Windows
 pip install -r requirements.txt
-```
 
-**1. Tokenize once.** The sweep reports fertility and byte-compression on held-out text, so vocabulary size is measured rather than assumed; a pretrained tokenizer skips the training step:
-
-```bash
-python -m src.data.train_tokenizer --sweep --candidates 2048 4096 8192 16384
+# 1 · tokenize once (CPU) and verify before spending GPU
 python -m src.data.prepare --tokenizer hf:Xenova/gpt-4 --out_dir data_s --track strict
-python -m src.data.verify --data_dir data_s --config configs/s_moe.yaml
-```
+python -m src.data.verify  --data_dir data_s --config configs/s_moe.yaml
 
-**2. Check parameter counts before spending compute:**
+# 2 · parameter counts (never hand-computed -- parity is the whole experiment)
+python -m src.params --config configs/s_dense.yaml configs/s_moe.yaml
 
-```bash
-python -m src.params --config configs/s_dense.yaml configs/s_moe.yaml configs/s_diffmoe.yaml
-```
+# 3 · train (re-running auto-resumes from last.pt)
+torchrun --standalone --nproc_per_node=2 -m src.train \
+    --config configs/s_moe.yaml --data_dir data_s --ddp --wandb
 
-**3. Train** (re-running resumes from the last checkpoint; only the best two by validation NLL are kept, plus the latest for resume):
+# 4 · the evaluation battery, cheapest first
+python scripts/eval_all.py                  # NLL/ppl/bpb/top-1, per-domain, routing
+python scripts/eval_uncertainty.py          # paired bootstrap CIs + win rates
+python scripts/eval_bootstrap_clustered.py  # domain-clustered CIs (CPU only)
+python scripts/eval_deep.py                 # NLL by position, calibration, freq deciles
+python scripts/eval_attention.py            # attention matrices: entropy, negative mass
 
-```bash
-python -m src.train --config configs/s_moe.yaml --data_dir data_s --wandb --wandb_project diff-moe
-torchrun --standalone --nproc_per_node=2 -m src.train --config configs/s_moe.yaml --data_dir data_s --ddp
-```
-
-**4. Evaluate every finished checkpoint under one identical protocol**, including per-domain NLL and routing statistics:
-
-```bash
-python scripts/eval_all.py
-```
-
-**5. Regenerate every figure in this README:**
-
-```bash
-python scripts/pull_wandb.py            # optional: refresh W&B history
+# 5 · every figure in this README
 python scripts/make_figures_part1.py
 ```
 
-For the one-click Kaggle version, see `notebooks/`.
+For the one-click Kaggle path see `notebooks/`.
 
----
+</details>
 
-## Project structure
+<details>
+<summary><b>📁 Project structure & tests</b></summary>
 
 ```
-configs/                   the 2×2 at three scales
-  a_{dense,diff,moe,diffmoe}.yaml    tier A, ~16M active, custom 4k BPE
-  s_{dense,diff,moe,diffmoe}.yaml    tier S, cl100k tokenizer  ← the runs above
-  b_final.yaml                       tier B, ~57M active
-
+configs/      the 2×2 at three scales (a_*, s_*, b_final)
 src/
-  model/
-    config.py              model + training config (dataclasses, YAML loader)
-    attention.py           standard and differential attention
-    moe.py                 gate, expert, and MoE feed-forward layer
-    block.py               transformer block
-    transformer.py         full model, parameter counting
-  data/
-    babylm.py              fetches the six BabyLM domain files
-    tokenizer.py           one interface over custom BPE, HF, and tiktoken
-    train_tokenizer.py     BPE training and vocabulary-size sweep
-    prepare.py             tokenize into a memory-mapped binary
-    verify.py              dtype / truncation / vocab-coverage checks
-    dataset.py             batch sampling from the memory-mapped file
-  train.py                 AMP, grad accumulation, checkpoint/resume, DDP, logging
-  eval.py                  NLL, perplexity, bits/byte, expert utilization, λ
-  params.py                parameter count reporting
-
-scripts/
-  eval_all.py              all checkpoints, one protocol, per-domain + routing
-  eval_uncertainty.py      per-window NLLs + paired bootstrap confidence intervals
-  eval_local.py            single checkpoint, config inferred from weight shapes
-  expert_domain.py         domain → expert routing analysis
-  pull_wandb.py            export a W&B run's full history to CSV
-  make_figures_part1.py    every figure in this README
-
-assets/                    rendered figures (embedded above)
-
-tests/                     gradient flow, causality, parameter parity, router
-                           balance, single-batch overfit, resume correctness
-notebooks/                 end-to-end Kaggle training notebooks
+  model/      attention.py (both variants) · moe.py · block.py · transformer.py
+  data/       babylm.py · tokenizer.py · prepare.py · verify.py · dataset.py
+  train.py    AMP, accumulation, checkpoint/resume, DDP, W&B
+  eval.py     NLL, ppl, bits/byte, expert utilization, λ logging
+  params.py   raw vs active parameter accounting
+scripts/      the evaluation battery + figure generation (see Reproduce)
+assets/       rendered figures
+tests/        gradient flow, causality, parameter parity, router balance,
+              single-batch overfit, resume correctness, token storage round-trip
 ```
-
----
-
-## Testing
 
 ```bash
 pytest tests/
 ```
 
-The suite verifies: every parameter receives a gradient (no silently disconnected components), no attention leaks future tokens, differential and standard attention are parameter-matched, the MoE router does not collapse to a single expert, a single batch can be overfit to near-zero loss, checkpoint/resume reproduces an uninterrupted run, and token ids survive the storage round-trip at both `uint16` and `uint32`.
+Each test targets a failure this codebase actually had or would silently tolerate — a gradient that never arrives, a vocabulary that overflows its dtype, an attention that leaks the future — rather than restating what the code does.
 
-Each test targets a specific failure this codebase has already had or would silently tolerate — a gradient that never arrives, a vocabulary that overflows its storage type — rather than restating what the code does.
+</details>
 
 ---
 
+## Why this project looks the way it does
+
+**Small scale is a microscope, not a compromise.** At 209M params and a fixed 167M-token corpus, a full run costs hours on free hardware — which makes a *grid* affordable, and grids are what turn claims into measurements. What small scale cannot promise is that the ordering holds at 70B; nothing at this budget can.
+
+**BabyLM was chosen for its structure, not its size.** Six labelled domains (child speech, dialogue, prose, subtitles, Wikipedia, phone calls) give MoE routing something real to specialize on — and give every per-domain analysis above its ground truth.
+
+The full narrative write-up — the plan, the math, both head-to-heads, and the instrument itself — is the three-part build log:
+
+- [**Part 1 — the plan, and MoE vs Diff-MoE**](docs/blog/part1-plan-and-moe-vs-diffmoe.md): why a 2×2, how parity is enforced, and the sparse pair.
+- [**Part 2 — does differential attention help on its own?**](docs/blog/part2-diff-dense-vs-dense.md): the dense pair, the mechanism verification, and the interaction.
+- [**Part 3 — what we measured, why those metrics, and what they'd mean in production**](docs/blog/part3-what-we-measured-and-why.md): the six evaluation passes, and what a 0.129-nat win actually buys you.
+
+Planning and assessment documents are in [`PLAN_AHEAD/`](PLAN_AHEAD/): current state and confounds, the full results record, and what to run next.
+
 ## References
 
-- Ye, T. et al. "Differential Transformer." 2024.
-- DeepSeek-AI. "DeepSeek-V2" / "DeepSeek-V3" technical reports — MoE routing design.
-- Charpentier, L. et al. "The 2024/2025 BabyLM Challenge: Sample-Efficient Pretraining on Developmentally Plausible Corpora."
+- Ye, T. et al. — *Differential Transformer*, 2024
+- DeepSeek-AI — *DeepSeek-V2/V3* technical reports (MoE routing design)
+- Charpentier, L. et al. — *The BabyLM Challenge: Sample-Efficient Pretraining on Developmentally Plausible Corpora*
 
 ## License
 
