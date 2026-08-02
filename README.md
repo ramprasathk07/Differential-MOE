@@ -77,7 +77,7 @@ Read the last column: **Diff-MoE beats plain MoE on five of six domains**, then 
 <details>
 <summary><b>📊 Full results & statistics</b> — paired bootstrap CIs, win rates, domain-clustered intervals</summary>
 
-**Why these metrics, in one paragraph.** **NLL** (nats/token) is the training objective itself — differences in it are additive and comparable, which is why every statistical test here runs on NLL. **Perplexity** is just `exp(NLL)`, read as "how many equally-likely next tokens is the model effectively choosing between" — intuitive, but exponential, so it exaggerates (a 4.2% NLL gain shows up as 12.1% perplexity). **bits/byte** normalises by raw UTF-8 bytes instead of tokens, making it the only number here that stays valid across different tokenizers — and it is literally a compression rate: 1.131 → 1.083 means the archive is 4.2% smaller. **Top-1** is how often the single best guess is exactly right, roughly an autocomplete acceptance rate; MoE's +0.8pp is about one extra correct token per 122. **Win rate** — the share of individual windows a model wins — is the one that changes rollout decisions: a 96% win rate is safe to ship, a 69% win rate means one document in three gets *worse* while your average looks green. [Part 3](docs/blog/part3-what-we-measured-and-why.md) covers all six evaluation passes and what each would mean in production.
+**Why these metrics, in one paragraph.** **NLL** (nats/token) is the training objective itself — differences in it are additive and comparable, which is why every statistical test here runs on NLL. **Perplexity** is just `exp(NLL)`, read as "how many equally-likely next tokens is the model effectively choosing between" — intuitive, but exponential, so it exaggerates (a 4.2% NLL gain shows up as 12.1% perplexity). **bits/byte** normalises by raw UTF-8 bytes instead of tokens, making it the only number here that stays valid across different tokenizers — and it is literally a compression rate: 1.131 → 1.083 means the archive is 4.2% smaller. **Top-1** is how often the single best guess is exactly right, roughly an autocomplete acceptance rate; MoE's +0.8pp is about one extra correct token per 122. **Win rate** — the share of individual windows a model wins — is the one that changes rollout decisions: a 96% win rate is safe to ship, a 69% win rate means one document in three gets *worse* while your average looks green. Six evaluation passes produced everything below — overall quality, paired and domain-clustered uncertainty, position-resolved NLL, attention statistics, and BLiMP — and four of them found things a single perplexity number would have got wrong.
 
 ### Held-out test (3,200 identical windows, 1.64M tokens, fp32)
 
@@ -249,13 +249,7 @@ Each test targets a failure this codebase actually had or would silently tolerat
 
 **BabyLM was chosen for its structure, not its size.** Six labelled domains (child speech, dialogue, prose, subtitles, Wikipedia, phone calls) give MoE routing something real to specialize on — and give every per-domain analysis above its ground truth.
 
-The full narrative write-up — the plan, the math, both head-to-heads, and the instrument itself — is the three-part build log:
-
-- [**Part 1 — the plan, and MoE vs Diff-MoE**](docs/blog/part1-plan-and-moe-vs-diffmoe.md): why a 2×2, how parity is enforced, and the sparse pair.
-- [**Part 2 — does differential attention help on its own?**](docs/blog/part2-diff-dense-vs-dense.md): the dense pair, the mechanism verification, and the interaction.
-- [**Part 3 — what we measured, why those metrics, and what they'd mean in production**](docs/blog/part3-what-we-measured-and-why.md): the six evaluation passes, and what a 0.129-nat win actually buys you.
-
-Planning and assessment documents are in [`PLAN_AHEAD/`](PLAN_AHEAD/): current state and confounds, the full results record, and what to run next.
+A three-part narrative write-up — the plan and the sparse pair, the dense pair and the mechanism verification, and a post on the evaluation battery itself — is maintained separately from this repository.
 
 ## References
 

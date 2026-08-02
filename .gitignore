@@ -221,9 +221,8 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-# docs/ and PLAN_AHEAD/ were blanket-ignored, which kept the build-log posts, the
-# eval JSONs and the planning documents out of version control entirely. They are
-# the project's main written output, so they are tracked now. The heavyweight
-# training artefacts are still excluded by the *.bin / *.pt / model_checkpoints
-# rules above.
-docs/_build/
+# Narrative write-ups, eval exports and planning documents are kept out of this
+# repository and maintained separately. The scripts still read and write
+# docs/blog/runs_export/ locally; those paths are simply not tracked.
+docs/
+PLAN_AHEAD/
