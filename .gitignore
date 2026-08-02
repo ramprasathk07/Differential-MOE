@@ -226,3 +226,10 @@ __marimo__/
 # docs/blog/runs_export/ locally; those paths are simply not tracked.
 docs/
 PLAN_AHEAD/
+
+# The architecture diagram is published as assets/fig_architecture.png; the
+# script that renders it stays local.
+scripts/make_arch_figure.py
+
+# Reference material from elsewhere — not ours to redistribute.
+assets/nemotron-3-super-120b-a12b.webp

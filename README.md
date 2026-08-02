@@ -11,6 +11,10 @@ Most architecture claims are demos: one model, every switch on, no baseline. Thi
 | **Hardware** | trained on Kaggle's free 2×T4 · evaluated on one RTX 3060 |
 | **Everything held fixed** | seed, data order, LR schedule, token budget, eval windows — byte-identical |
 
+![Differential-MoE architecture](assets/fig_architecture.png)
+
+*The diagram shows **Diff-MoE**, the cell with both mechanisms switched on. The other three are ablations of it — swap the attention, swap the feed-forward, or neither. Every number in it is read from the trained checkpoints' own `report.json`.*
+
 ![Validation NLL for the four cells](assets/fig_p1_val_nll.png)
 
 ## Findings in 30 seconds
@@ -168,6 +172,8 @@ Routing stayed healthy in both MoE cells (per-domain entropy ≥ 0.996, no colla
 
 <details>
 <summary><b>🏗️ Architecture & implementation</b></summary>
+
+See the [architecture diagram](#differential-moe) at the top for how these fit together.
 
 | Component | Design |
 |---|---|
