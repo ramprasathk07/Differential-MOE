@@ -25,6 +25,7 @@ import json
 import os
 import sys
 import time
+from dataclasses import asdict
 
 import torch
 
@@ -50,7 +51,7 @@ PROMPTS = ["Once upon a time", "The little boy said",
 
 # The 2x2. Any run whose directory is absent is skipped, so this file needs no
 # edit as the remaining cells finish.
-RUNS = ["s_dense", "s_diff", "s_moe", "s_diffmoe"]
+RUNS = ["s_dense", "s_diff", "s_moe", "s_diffmoe", "s_stable_latentmoe"]
 
 
 def best_checkpoint(run_dir):
@@ -69,8 +70,11 @@ def best_checkpoint(run_dir):
     return local if os.path.isfile(local) else None
 
 
-def infer_config(sd) -> ModelConfig:
+def infer_config(sd, stored_config=None) -> ModelConfig:
     """Rebuild the ModelConfig from state-dict tensor shapes alone."""
+    if stored_config:
+        return ModelConfig(**stored_config)
+
     vocab, dim = sd["embed.weight"].shape
     layer_ids = sorted({int(k.split(".")[1]) for k in sd if k.startswith("blocks.")})
     n_layers = max(layer_ids) + 1
@@ -86,7 +90,10 @@ def infer_config(sd) -> ModelConfig:
 
     moe_blocks = [i for i in layer_ids if f"blocks.{i}.ffn.gate.weight" in sd]
     dense_blocks = [i for i in layer_ids if f"blocks.{i}.ffn.gate.weight" not in sd]
-    ffn = "moe" if moe_blocks else "dense"
+    stable_latent = any(
+        k.endswith("ffn.routed_expert_down_proj.weight") for k in sd
+    )
+    ffn = "stable_latent_moe" if stable_latent else "moe" if moe_blocks else "dense"
     n_dense_layers = min(moe_blocks) if moe_blocks else n_layers
 
     if moe_blocks:
@@ -99,13 +106,24 @@ def infer_config(sd) -> ModelConfig:
     inter_dim = (sd[f"blocks.{dense_blocks[0]}.ffn.w1.weight"].shape[0]
                  if dense_blocks else 4 * dim)
 
+    latent_dim = (
+        sd[f"blocks.{moe_blocks[0]}.ffn.routed_expert_down_proj.weight"].shape[0]
+        if stable_latent
+        else None
+    )
     return ModelConfig(
         vocab_size=vocab, dim=dim, n_layers=n_layers, n_heads=n_heads,
         seq_len=SEQ_LEN, tie_embeddings=True,
         attention="differential" if differential else "standard",
         ffn=ffn, inter_dim=inter_dim,
-        n_dense_layers=n_dense_layers, n_experts=n_experts, top_k=2,
+        n_dense_layers=n_dense_layers, n_experts=n_experts,
+        top_k=4 if stable_latent else 2,
         expert_inter_dim=expert_inter,
+        n_shared_experts=2 if stable_latent else 0,
+        shared_inter_dim=latent_dim if stable_latent else 512,
+        latent_dim=latent_dim,
+        aux_loss_coef=0.0 if stable_latent else 0.01,
+        router_z_coef=0.0 if stable_latent else 0.001,
     )
 
 
@@ -164,10 +182,10 @@ def main():
         ckpt = torch.load(ckpt_path, map_location="cpu", mmap=True, weights_only=False)
         sd = ckpt["model"]
         step, best_val = ckpt.get("step"), ckpt.get("best_val")
-        cfg = infer_config(sd)
+        cfg = infer_config(sd, ckpt.get("model_config"))
         print(f"  step {step} | best_val {best_val} | {cfg.attention}/{cfg.ffn} "
               f"dim{cfg.dim} L{cfg.n_layers} H{cfg.n_heads} "
-              f"experts={cfg.n_experts if cfg.ffn == 'moe' else '-'}")
+              f"experts={cfg.n_experts if cfg.ffn != 'dense' else '-'}")
 
         model = Transformer(cfg).to(DEVICE)
         missing, unexpected = model.load_state_dict(sd, strict=False)
@@ -215,12 +233,7 @@ def main():
             "eval_note": f"identical protocol across runs: {len(global_offsets)} windows "
                          f"({len(global_offsets)*SEQ_LEN/1e6:.2f}M tokens) spread evenly over the "
                          f"{len(test)}-token test split, batch {BATCH}x{SEQ_LEN}, fp32 on {DEVICE}",
-            "model": {"attention": cfg.attention, "ffn": cfg.ffn, "dim": cfg.dim,
-                      "n_layers": cfg.n_layers, "n_heads": cfg.n_heads,
-                      "vocab_size": cfg.vocab_size, "seq_len": cfg.seq_len,
-                      "n_experts": cfg.n_experts, "top_k": cfg.top_k,
-                      "expert_inter_dim": cfg.expert_inter_dim, "inter_dim": cfg.inter_dim,
-                      "n_dense_layers": cfg.n_dense_layers},
+            "model": asdict(cfg),
             "params": counts,
             "test_nll": res.nll,
             "test_ppl": res.perplexity,
@@ -231,6 +244,7 @@ def main():
             "expert_entropy": res.expert_entropy,
             "expert_imbalance": res.expert_imbalance,
             "expert_counts": res.expert_counts,
+            "router_bias": res.router_bias,
             "lambda_means": {i: sum(v) / len(v) for i, v in res.lambda_values.items()},
             "lambda_per_head": res.lambda_values,
             "sample_generations": generations,

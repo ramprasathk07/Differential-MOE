@@ -14,6 +14,7 @@ into the run dir so docs/blog/make_figures_part2.py can render the figures.
 import json
 import os
 import sys
+from dataclasses import asdict
 
 import torch
 
@@ -36,8 +37,11 @@ N_EVAL_WINDOWS = 3200  # windows sampled EVENLY across the full test split -- re
 GEN_MAX_NEW = 48
 
 
-def infer_config(sd) -> ModelConfig:
+def infer_config(sd, stored_config=None) -> ModelConfig:
     """Rebuild the ModelConfig from state-dict tensor shapes alone."""
+    if stored_config:
+        return ModelConfig(**stored_config)
+
     vocab, dim = sd["embed.weight"].shape
     layer_ids = sorted({int(k.split(".")[1]) for k in sd if k.startswith("blocks.")})
     n_layers = max(layer_ids) + 1
@@ -53,7 +57,10 @@ def infer_config(sd) -> ModelConfig:
 
     moe_blocks = [i for i in layer_ids if f"blocks.{i}.ffn.gate.weight" in sd]
     dense_blocks = [i for i in layer_ids if f"blocks.{i}.ffn.gate.weight" not in sd]
-    ffn = "moe" if moe_blocks else "dense"
+    stable_latent = any(
+        k.endswith("ffn.routed_expert_down_proj.weight") for k in sd
+    )
+    ffn = "stable_latent_moe" if stable_latent else "moe" if moe_blocks else "dense"
     n_dense_layers = min(moe_blocks) if moe_blocks else n_layers
 
     if moe_blocks:
@@ -66,13 +73,24 @@ def infer_config(sd) -> ModelConfig:
     inter_dim = (sd[f"blocks.{dense_blocks[0]}.ffn.w1.weight"].shape[0]
                  if dense_blocks else 4 * dim)
 
+    latent_dim = (
+        sd[f"blocks.{moe_blocks[0]}.ffn.routed_expert_down_proj.weight"].shape[0]
+        if stable_latent
+        else None
+    )
     cfg = ModelConfig(
         vocab_size=vocab, dim=dim, n_layers=n_layers, n_heads=n_heads,
         seq_len=SEQ_LEN, tie_embeddings=True,
         attention="differential" if differential else "standard",
         ffn=ffn, inter_dim=inter_dim,
-        n_dense_layers=n_dense_layers, n_experts=n_experts, top_k=2,
+        n_dense_layers=n_dense_layers, n_experts=n_experts,
+        top_k=4 if stable_latent else 2,
         expert_inter_dim=expert_inter,
+        n_shared_experts=2 if stable_latent else 0,
+        shared_inter_dim=latent_dim if stable_latent else 512,
+        latent_dim=latent_dim,
+        aux_loss_coef=0.0 if stable_latent else 0.01,
+        router_z_coef=0.0 if stable_latent else 0.001,
     )
     return cfg
 
@@ -101,7 +119,7 @@ def main():
     print("checkpoint step:", step)
     print("checkpoint best_val:", best_val)
 
-    cfg = infer_config(sd)
+    cfg = infer_config(sd, ckpt.get("model_config"))
     print("inferred config:", cfg)
 
     model = Transformer(cfg).to(DEVICE)
@@ -162,6 +180,7 @@ def main():
         "test_top1_acc": result.top1_acc,
         "expert_entropy": result.expert_entropy,
         "expert_imbalance": result.expert_imbalance,
+        "router_bias": result.router_bias,
         "lambda_means": {i: sum(v) / len(v) for i, v in result.lambda_values.items()},
         "lambda_per_head": result.lambda_values,
         "sample_generations": generations,
@@ -172,14 +191,7 @@ def main():
     # minimal report.json so make_figures_part2.py has model geometry + best_val
     report = {
         "run_name": "s_diffmoe",
-        "model": {
-            "attention": cfg.attention, "ffn": cfg.ffn, "dim": cfg.dim,
-            "n_layers": cfg.n_layers, "n_heads": cfg.n_heads,
-            "vocab_size": cfg.vocab_size, "seq_len": cfg.seq_len,
-            "n_experts": cfg.n_experts, "top_k": cfg.top_k,
-            "expert_inter_dim": cfg.expert_inter_dim, "inter_dim": cfg.inter_dim,
-            "n_dense_layers": cfg.n_dense_layers,
-        },
+        "model": asdict(cfg),
         "params": counts,
         "best_val": best_val,
         "training": {"checkpoint_step": step},

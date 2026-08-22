@@ -35,7 +35,11 @@ class Transformer(nn.Module):
         self.apply(self._init_weights)
         # residual-output projections get the GPT-2 style 1/sqrt(2L) shrink
         for name, p in self.named_parameters():
-            if name.endswith("wo.weight") or name.endswith("w2.weight"):
+            if (
+                name.endswith("wo.weight")
+                or name.endswith("w2.weight")
+                or name.endswith("routed_expert_up_proj.weight")
+            ):
                 nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * cfg.n_layers))
 
     @staticmethod
@@ -59,6 +63,17 @@ class Transformer(nn.Module):
         x = self.norm(x)
         logits = self.head(x)
         return logits, aux_total, z_total
+
+    @torch.no_grad()
+    def update_quantile_balancing(self) -> dict:
+        """Commit delayed router-bias updates after one accumulated train step."""
+        updated = {}
+        for i, block in enumerate(self.blocks):
+            if block.is_moe:
+                bias = block.ffn.update_quantile_bias()
+                if bias is not None:
+                    updated[i] = bias
+        return updated
 
     @torch.no_grad()
     def generate(
