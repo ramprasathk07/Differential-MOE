@@ -13,10 +13,10 @@ Dual GPU / DDP (opt-in -- launch with torchrun, add --ddp):
 Without --ddp (and without torchrun) this always runs single-process, exactly
 as before -- --ddp is the single switch between the two modes.
 
-Note: MoE experts that receive zero tokens in a step get no gradient that step;
+Note: routed experts that receive zero tokens in a step get no gradient that step;
 vanilla DDP requires every registered parameter to participate every backward
-or it errors. We pass find_unused_parameters=True automatically for ffn=="moe"
-configs to guard against this.
+or it errors. We pass find_unused_parameters=True automatically for both routed
+FFN variants to guard against this.
 """
 
 import argparse
@@ -27,6 +27,7 @@ import os
 import random
 import subprocess
 import time
+from dataclasses import asdict
 from typing import Any, Dict
 
 import numpy as np
@@ -38,7 +39,7 @@ from torch.nn.parallel import DistributedDataParallel
 from src.data import eval_batches, get_batch, load_tokens
 from src.eval import bytes_per_token_estimate, evaluate, expert_stats
 from src.model import Config, Transformer, count_params
-from src.model.moe import MoE
+from src.model.moe import RoutedMoE
 
 
 def set_seed(seed: int):
@@ -74,7 +75,9 @@ def configure_optimizer(model: torch.nn.Module, train_cfg) -> torch.optim.Optimi
     return torch.optim.AdamW(groups, lr=train_cfg.lr, betas=(train_cfg.beta1, train_cfg.beta2))
 
 
-def save_checkpoint(path, model, optimizer, scaler, step, rng_state, best_val):
+def save_checkpoint(
+    path, model, optimizer, scaler, step, rng_state, best_val, model_config=None
+):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     torch.save(
         {
@@ -84,6 +87,7 @@ def save_checkpoint(path, model, optimizer, scaler, step, rng_state, best_val):
             "step": step,
             "rng_state": rng_state,
             "best_val": best_val,
+            "model_config": asdict(model_config) if model_config is not None else None,
         },
         path,
     )
@@ -94,10 +98,11 @@ class BestCheckpoints:
     the rest as better ones arrive. Separate from last.pt (always kept, for
     plain resume regardless of quality)."""
 
-    def __init__(self, run_dir: str, max_keep: int = 2):
+    def __init__(self, run_dir: str, max_keep: int = 2, model_config=None):
         self.dir = os.path.join(run_dir, "best")
         self.index_path = os.path.join(run_dir, "best_index.json")
         self.max_keep = max_keep
+        self.model_config = model_config
         os.makedirs(self.dir, exist_ok=True)
         self.entries = []
         if os.path.exists(self.index_path):
@@ -108,7 +113,16 @@ class BestCheckpoints:
         if len(self.entries) >= self.max_keep and nll >= self.entries[-1]["nll"]:
             return False
         path = os.path.join(self.dir, f"step{step}_nll{nll:.4f}.pt")
-        save_checkpoint(path, model, optimizer, scaler, step, gen.get_state(), nll)
+        save_checkpoint(
+            path,
+            model,
+            optimizer,
+            scaler,
+            step,
+            gen.get_state(),
+            nll,
+            self.model_config,
+        )
         self.entries.append({"step": step, "nll": nll, "path": path})
         self.entries.sort(key=lambda e: e["nll"])
         while len(self.entries) > self.max_keep:
@@ -128,18 +142,30 @@ def train_time_diagnostics(raw_model: Transformer) -> Dict[str, Any]:
     """Cheap, forward-pass-free (lambda) or forward-pass-piggybacked (expert
     routing, from the last training micro-batch) diagnostics -- safe to compute
     every log_freq step, not just at eval_freq."""
-    diag: Dict[str, Any] = {"lambda_means": {}, "lambda_raw": {}, "expert_entropy": {},
-                             "expert_imbalance": {}, "expert_counts": {}}
+    diag: Dict[str, Any] = {
+        "lambda_means": {},
+        "lambda_raw": {},
+        "expert_entropy": {},
+        "expert_imbalance": {},
+        "expert_counts": {},
+        "router_bias": {},
+    }
     for i, block in enumerate(raw_model.blocks):
         if hasattr(block.attn, "current_lambda"):
             lam = block.attn.current_lambda().detach().cpu().tolist()
             diag["lambda_raw"][i] = lam
             diag["lambda_means"][i] = sum(lam) / len(lam)
-        if block.is_moe and isinstance(block.ffn, MoE) and block.ffn.last_counts is not None:
+        if (
+            block.is_moe
+            and isinstance(block.ffn, RoutedMoE)
+            and block.ffn.last_counts is not None
+        ):
             entropy, imbalance = expert_stats(block.ffn.last_counts)
             diag["expert_entropy"][i] = entropy
             diag["expert_imbalance"][i] = imbalance
             diag["expert_counts"][i] = block.ffn.last_counts.detach().cpu().tolist()
+            if hasattr(block.ffn.gate, "expert_bias"):
+                diag["router_bias"][i] = block.ffn.gate.expert_bias.detach().cpu().tolist()
     return diag
 
 
@@ -159,17 +185,7 @@ def write_report(path, cfg, counts, world_size, tokens_trained, steps_trained,
         "git_commit": git_commit(),
         "seed": cfg.train.seed,
         "world_size": world_size,
-        "model": {
-            "attention": cfg.model.attention,
-            "ffn": cfg.model.ffn,
-            "dim": cfg.model.dim,
-            "n_layers": cfg.model.n_layers,
-            "n_heads": cfg.model.n_heads,
-            "vocab_size": cfg.model.vocab_size,
-            "seq_len": cfg.model.seq_len,
-            "n_experts": cfg.model.n_experts if cfg.model.ffn == "moe" else None,
-            "top_k": cfg.model.top_k if cfg.model.ffn == "moe" else None,
-        },
+        "model": asdict(cfg.model),
         "params": {k: v for k, v in counts.items()},
         "training": {
             "steps_trained": steps_trained,
@@ -253,7 +269,9 @@ def main():
               f"world_size={world_size}")
 
     if args.ddp:
-        ddp_kwargs: Dict[str, Any] = {"find_unused_parameters": cfg.model.ffn == "moe"}
+        ddp_kwargs: Dict[str, Any] = {
+            "find_unused_parameters": cfg.model.ffn in ("moe", "stable_latent_moe")
+        }
         if local_rank is not None:
             ddp_kwargs["device_ids"] = [local_rank]
         model = DistributedDataParallel(raw_model, **ddp_kwargs)
@@ -262,7 +280,11 @@ def main():
 
     optimizer = configure_optimizer(raw_model, cfg.train)
     scaler = torch.amp.GradScaler(device_type, enabled=(cfg.train.amp and device_type == "cuda"))
-    best_ckpts = BestCheckpoints(run_dir, max_keep=cfg.train.max_best_checkpoints)
+    best_ckpts = BestCheckpoints(
+        run_dir,
+        max_keep=cfg.train.max_best_checkpoints,
+        model_config=cfg.model,
+    )
 
     start_step = 0
     best_val = best_ckpts.best_nll
@@ -371,6 +393,9 @@ def main():
         grad_norm = torch.nn.utils.clip_grad_norm_(raw_model.parameters(), cfg.train.grad_clip)
         scaler.step(optimizer)
         scaler.update()
+        # Biases derived from optimizer step t are committed only after every
+        # accumulated micro-batch, so they first affect step t+1.
+        raw_model.update_quantile_balancing()
 
         running_loss += step_loss
         running_aux += step_aux
@@ -423,6 +448,10 @@ def main():
                         np.repeat(np.arange(len(diag["expert_counts"][i])), diag["expert_counts"][i])
                         if sum(diag["expert_counts"][i]) > 0 else [0]
                     )
+                    if i in diag["router_bias"]:
+                        log[f"train/router_bias_L{i}"] = _wandb.Histogram(
+                            diag["router_bias"][i]
+                        )
                 if device_type == "cuda":
                     log["train/gpu_mem_allocated_mb"] = torch.cuda.memory_allocated(device) / 1e6
                     log["train/gpu_mem_reserved_mb"] = torch.cuda.memory_reserved(device) / 1e6
@@ -460,6 +489,10 @@ def main():
                         log[f"val/expert_counts_L{i}"] = _wandb.Histogram(
                             np.repeat(np.arange(len(ecounts)), ecounts) if sum(ecounts) > 0 else [0]
                         )
+                        if i in result.router_bias:
+                            log[f"val/router_bias_L{i}"] = _wandb.Histogram(
+                                result.router_bias[i]
+                            )
                     for i, lam in result.lambda_values.items():
                         log[f"val/lambda_mean_L{i}"] = sum(lam) / len(lam)
                         log[f"val/lambda_hist_L{i}"] = _wandb.Histogram(lam)
@@ -467,13 +500,31 @@ def main():
 
                 best_ckpts.offer(step + 1, result.nll, raw_model, optimizer, scaler, gen)
                 best_val = best_ckpts.best_nll
-                save_checkpoint(ckpt_path, raw_model, optimizer, scaler, step + 1, gen.get_state(), best_val)
+                save_checkpoint(
+                    ckpt_path,
+                    raw_model,
+                    optimizer,
+                    scaler,
+                    step + 1,
+                    gen.get_state(),
+                    best_val,
+                    cfg.model,
+                )
                 model.train()
             if args.ddp:
                 dist.barrier()
         elif (step + 1) % cfg.train.ckpt_freq == 0 or (step + 1) == cfg.train.max_steps:
             if is_main:
-                save_checkpoint(ckpt_path, raw_model, optimizer, scaler, step + 1, gen.get_state(), best_val)
+                save_checkpoint(
+                    ckpt_path,
+                    raw_model,
+                    optimizer,
+                    scaler,
+                    step + 1,
+                    gen.get_state(),
+                    best_val,
+                    cfg.model,
+                )
             if args.ddp:
                 dist.barrier()
 

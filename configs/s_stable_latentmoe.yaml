@@ -1,0 +1,65 @@
+# Tier S follow-up: standard attention + Kimi-style Stable LatentMoE.
+#
+# This uses the ACTUAL geometry of the completed tier-S checkpoints (768d x 14),
+# not the older 896d x 16 geometry still present in the original s_*.yaml files.
+# It is designed as a direct comparison with the trained s_moe checkpoint:
+#
+#   s_moe checkpoint:       379.138M raw / 209.268M active
+#   s_stable_latentmoe:     ~379.235M raw / ~209.365M active
+#
+# Both deltas are below 0.05%. The latent path halves routed width, doubles top-k,
+# and uses extra experts plus two always-on full-width shared experts while keeping
+# both the resident and active parameter budgets effectively fixed.
+run_name: s_stable_latentmoe
+data_dir: data_s
+
+model:
+  vocab_size: 100352
+  dim: 768
+  n_layers: 14
+  n_heads: 12
+  seq_len: 512
+  tie_embeddings: true
+  attention: standard
+  rope_theta: 10000.0
+
+  ffn: stable_latent_moe
+  inter_dim: 3072          # used by the first two dense layers
+  n_dense_layers: 2
+
+  # Routed branch: router sees 768d; selected experts operate at 384d.
+  latent_dim: 384
+  n_experts: 16
+  top_k: 4
+  expert_inter_dim: 1024
+
+  # Two shared experts always process the original 768d token. The implementation
+  # fuses them into one 2*384-wide SiTU-GLU, which is algebraically equivalent to
+  # summing two independent experts and matches Kimi's implementation strategy.
+  n_shared_experts: 2
+  shared_inter_dim: 384
+
+  # Kimi K3 Stable LatentMoE details.
+  situ_beta: 4.0
+  situ_linear_beta: 25.0
+  quantile_balance: true
+  aux_loss_coef: 0.0       # Quantile Balancing replaces auxiliary load loss
+  router_z_coef: 0.0       # sigmoid router; the softmax z-loss is not used
+  norm_eps: 1.0e-6
+
+train:
+  batch_size: 2
+  accum_steps: 32
+  max_steps: 2900
+  lr: 2.0e-4
+  min_lr_ratio: 0.1
+  warmup_steps: 60
+  weight_decay: 0.1
+  grad_clip: 1.0
+  amp: true
+  log_freq: 20
+  eval_freq: 250
+  eval_batches: 50
+  ckpt_freq: 250
+  max_best_checkpoints: 2
+  seed: 42

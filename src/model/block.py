@@ -7,15 +7,18 @@ import torch.nn as nn
 
 from .attention import RMSNorm, make_attention
 from .config import ModelConfig
-from .moe import MoE, SwiGLU
+from .moe import MoE, StableLatentMoE, SwiGLU
 
 
 class Block(nn.Module):
     def __init__(self, cfg: ModelConfig, layer_id: int):
         super().__init__()
         self.attn = make_attention(cfg, layer_id)
-        self.is_moe = cfg.ffn == "moe" and layer_id >= cfg.n_dense_layers
-        self.ffn = MoE(cfg) if self.is_moe else SwiGLU(cfg.dim, cfg.inter_dim)
+        self.is_moe = cfg.ffn in ("moe", "stable_latent_moe") and layer_id >= cfg.n_dense_layers
+        if self.is_moe:
+            self.ffn = StableLatentMoE(cfg) if cfg.ffn == "stable_latent_moe" else MoE(cfg)
+        else:
+            self.ffn = SwiGLU(cfg.dim, cfg.inter_dim)
         self.attn_norm = RMSNorm(cfg.dim, cfg.norm_eps)
         self.ffn_norm = RMSNorm(cfg.dim, cfg.norm_eps)
 
