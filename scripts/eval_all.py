@@ -1,5 +1,5 @@
 """Evaluate every finished tier-S checkpoint on the held-out BabyLM test split
-under one identical protocol, so the three runs can be compared directly.
+under one identical protocol, including the Stable LatentMoE attention pair.
 
 The .pt files carry no config and came from a runtime-shrunk Kaggle run, so the
 repo YAMLs do not match their geometry -- the ModelConfig is reconstructed from
@@ -51,7 +51,14 @@ PROMPTS = ["Once upon a time", "The little boy said",
 
 # The 2x2. Any run whose directory is absent is skipped, so this file needs no
 # edit as the remaining cells finish.
-RUNS = ["s_dense", "s_diff", "s_moe", "s_diffmoe", "s_stable_latentmoe"]
+RUNS = [
+    "s_dense",
+    "s_diff",
+    "s_moe",
+    "s_diffmoe",
+    "s_stable_latentmoe",
+    "s_diff_stable_latentmoe",
+]
 
 
 def best_checkpoint(run_dir):
