@@ -220,6 +220,12 @@ python scripts/make_figures_part1.py
 
 For the one-click Kaggle path see `notebooks/`.
 
+For a larger Stable LatentMoE run on one **RTX 6000 Ada (48 GB)**, see the
+[training recipe](configs/rtx6000ada_stable_latentmoe.md) and
+[YAML](configs/rtx6000ada_stable_latentmoe.yaml). It includes streaming preparation
+of Hugging Face FineWeb-Edu, 915M total / 405M active parameters, and a 2.15B-token
+training schedule.
+
 </details>
 
 <details>
