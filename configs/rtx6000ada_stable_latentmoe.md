@@ -81,16 +81,56 @@ python -m src.data.verify --data_dir data_fineweb_edu --config configs/rtx6000ad
 python -m src.train --config configs/rtx6000ada_stable_latentmoe.yaml --device cuda
 ```
 
-Use `python -m src.train` on one GPU. For W&B logging, append
-`--wandb --wandb_project latentmoe-fineweb-edu`. Running the training command
-again automatically resumes `checkpoints/rtx6000ada_stable_latentmoe_fineweb_edu/last.pt`.
+Use `python -m src.train` on one GPU. Running the training command again
+automatically resumes `checkpoints/rtx6000ada_stable_latentmoe_fineweb_edu/last.pt`.
+
+### W&B login and metrics
+
+Copy [.env.example](../.env.example) to `.env` in the repository root, then fill
+in `WANDB_API_KEY` from [W&B](https://wandb.ai/authorize) and, optionally, your
+`WANDB_ENTITY` team slug. The template sets `WANDB_ENABLED=true` and
+`WANDB_PROJECT=latentmoe-fineweb-edu`. `.env` is ignored by Git.
+
+The same plain `python -m src.train --config ... --device cuda` command above
+loads `.env` automatically and authenticates using the key. No separate login
+command or `--wandb` flag is needed. Existing shell variables override `.env`;
+CLI flags such as `--wandb_project` override those defaults. `--env_file PATH`
+selects another file. For an existing SDK login, the API key may remain blank.
+These use W&B's documented
+[environment settings](https://docs.wandb.ai/models/track/environment-variables).
+
+Use `--no-wandb` to train without logging or `--wandb_mode offline` for local
+logging without authentication or cloud uploads. The GPU smoke test below uses
+offline mode. Install the new dependency with `python -m pip install -r requirements.txt`.
+
+The dashboard includes:
+
+- Training CE loss, total objective, perplexity, auxiliary and router losses,
+  learning rate, gradient norm, tokens, training throughput, AMP scale, and
+  skipped optimizer updates in the current process.
+- Validation NLL, perplexity, top-1 accuracy, bits/token, and bits/byte when the
+  tokenizer is available.
+- Per-layer expert entropy, imbalance, assignment histograms and individual
+  expert counts, router bias histograms and individual biases. Training routing
+  describes the latest microbatch; validation routing covers all eval batches.
+- Differential-attention lambda means and histograms when that attention is used.
+- Current and peak allocated/reserved CUDA memory; CPU runs omit GPU metrics.
+- Model geometry, parameter counts, training settings, and effective batch size
+  in the run config; best validation score and final totals in the run summary.
+
+Train and validation metrics share one history entry when they occur on the same
+step. Charts use `optimizer_step` as the x-axis. The run ID is stored alongside
+checkpoints in `wandb_run.json`; online restarts in the same output directory
+resume that W&B run. Offline restarts produce separate local logging segments.
+For a fresh experiment, choose a new `--out_dir` or YAML `run_name`. Environment
+contents and API keys are never included in the logged model/training config.
 
 Before the full run, use a separate output directory for a two-step GPU smoke
 test, including gradient accumulation, AdamW state allocation, evaluation, and
 checkpoint saving:
 
 ```bash
-python -m src.train --config configs/rtx6000ada_stable_latentmoe.yaml --device cuda --max_steps 2 --out_dir checkpoints/smoke_rtx6000ada
+python -m src.train --config configs/rtx6000ada_stable_latentmoe.yaml --device cuda --max_steps 2 --out_dir checkpoints/smoke_rtx6000ada --wandb --wandb_mode offline
 ```
 
 This uses the prepared corpus. To test preparation with less data first, use

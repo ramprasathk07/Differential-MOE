@@ -40,6 +40,7 @@ from src.data import eval_batches, get_batch, load_tokens
 from src.eval import bytes_per_token_estimate, evaluate, expert_stats
 from src.model import Config, Transformer, count_params
 from src.model.moe import RoutedMoE
+from src.tracking import env_flag, init_wandb, load_training_env, routing_metrics
 
 
 def set_seed(seed: int):
@@ -205,8 +206,13 @@ def write_report(path, cfg, counts, world_size, tokens_trained, steps_trained,
     return report
 
 
-def main():
+def parse_args(argv=None):
+    env_parser = argparse.ArgumentParser(add_help=False)
+    env_parser.add_argument("--env_file", default=None)
+    env_args, _ = env_parser.parse_known_args(argv)
+    load_training_env(env_args.env_file)
     ap = argparse.ArgumentParser()
+    ap.add_argument("--env_file", default=None, help="defaults to .env in the repository root")
     ap.add_argument("--config", type=str, required=True)
     ap.add_argument("--data_dir", type=str, default=None, help="overrides config's data_dir")
     ap.add_argument("--out_dir", type=str, default="checkpoints")
@@ -215,11 +221,22 @@ def main():
                      help="ignored when --ddp is set (device is derived from LOCAL_RANK)")
     ap.add_argument("--ddp", action="store_true",
                      help="enable multi-GPU DistributedDataParallel; launch via torchrun")
-    ap.add_argument("--wandb", action="store_true")
-    ap.add_argument("--wandb_project", type=str, default="diff-moe",
+    ap.add_argument("--wandb", action=argparse.BooleanOptionalAction, default=env_flag("WANDB_ENABLED"),
+                     help="enable W&B; defaults to WANDB_ENABLED from the environment/.env")
+    ap.add_argument("--wandb_project", type=str, default=os.environ.get("WANDB_PROJECT") or "diff-moe",
                      help="wandb project name -- change per Kaggle run without editing code")
+    ap.add_argument("--wandb_entity", default=os.environ.get("WANDB_ENTITY") or None)
+    ap.add_argument("--wandb_mode", choices=["online", "offline", "disabled"],
+                     default=os.environ.get("WANDB_MODE") or "online")
     ap.add_argument("--max_steps", type=int, default=None, help="override, e.g. for smoke tests")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
+    if args.wandb_mode not in ("online", "offline", "disabled"):
+        ap.error("WANDB_MODE must be online, offline, or disabled")
+    return args
+
+
+def main():
+    args = parse_args()
 
     local_rank = None
     if args.ddp:
@@ -342,9 +359,7 @@ def main():
 
     wandb_run = None
     if args.wandb and is_main:
-        import wandb
-
-        wandb_run = wandb.init(project=args.wandb_project, name=cfg.run_name, config=vars(cfg.train))
+        wandb_run = init_wandb(args, cfg, counts, world_size, run_dir, resuming=bool(resume_path))
 
     csv_writer = csv_file = None
     if is_main:
@@ -360,8 +375,9 @@ def main():
     tokens_per_step = cfg.train.batch_size * cfg.model.seq_len * cfg.train.accum_steps * world_size
 
     model.train()
-    t0 = time.time()
     train_start = time.time()
+    running_time = 0.0
+    skipped_steps = 0
     running_loss = 0.0
     running_aux = 0.0
     running_z = 0.0
@@ -369,6 +385,8 @@ def main():
     last_avg_loss = None
 
     for step in range(start_step, cfg.train.max_steps):
+        step_start = time.perf_counter()
+        wandb_metrics = {}
         optimizer.zero_grad(set_to_none=True)
         lr = lr_at(step, cfg.train, cfg.train.lr)
         for g in optimizer.param_groups:
@@ -391,8 +409,10 @@ def main():
 
         scaler.unscale_(optimizer)
         grad_norm = torch.nn.utils.clip_grad_norm_(raw_model.parameters(), cfg.train.grad_clip)
+        previous_scale = scaler.get_scale()
         scaler.step(optimizer)
         scaler.update()
+        skipped_steps += int(scaler.get_scale() < previous_scale)
         # Biases derived from optimizer step t are committed only after every
         # accumulated micro-batch, so they first affect step t+1.
         raw_model.update_quantile_balancing()
@@ -401,17 +421,15 @@ def main():
         running_aux += step_aux
         running_z += step_z
         running_count += 1
+        running_time += time.perf_counter() - step_start
         tokens_trained = tokens_per_step * (step + 1)
 
-        if is_main and (step + 1) % cfg.train.log_freq == 0:
+        if is_main and ((step + 1) % cfg.train.log_freq == 0 or (step + 1) == cfg.train.max_steps):
             avg_loss = running_loss / running_count
             avg_aux = running_aux / running_count
             avg_z = running_z / running_count
             last_avg_loss = avg_loss
-            elapsed = time.time() - t0
-            tok_per_sec = (
-                cfg.train.batch_size * cfg.model.seq_len * cfg.train.accum_steps * world_size * cfg.train.log_freq
-            ) / elapsed
+            tok_per_sec = tokens_per_step * running_count / max(running_time, 1e-9)
             ppl = math.exp(min(avg_loss, 50))
             diag = train_time_diagnostics(raw_model)
             diag_summary = ""
@@ -432,35 +450,22 @@ def main():
             )
             csv_file.flush()
             if wandb_run:
-                import wandb as _wandb
-
                 log = {"train/loss": avg_loss, "train/ppl": ppl, "train/aux_loss": avg_aux,
                        "train/router_z_loss": avg_z, "train/lr": lr,
                        "train/grad_norm": grad_norm.item(), "train/tok_per_sec": tok_per_sec,
-                       "train/tokens_trained": tokens_trained}
-                for i, mean_lam_i in diag["lambda_means"].items():
-                    log[f"train/lambda_mean_L{i}"] = mean_lam_i
-                    log[f"train/lambda_hist_L{i}"] = _wandb.Histogram(diag["lambda_raw"][i])
-                for i, e in diag["expert_entropy"].items():
-                    log[f"train/expert_entropy_L{i}"] = e
-                    log[f"train/expert_imbalance_L{i}"] = diag["expert_imbalance"][i]
-                    log[f"train/expert_counts_L{i}"] = _wandb.Histogram(
-                        np.repeat(np.arange(len(diag["expert_counts"][i])), diag["expert_counts"][i])
-                        if sum(diag["expert_counts"][i]) > 0 else [0]
-                    )
-                    if i in diag["router_bias"]:
-                        log[f"train/router_bias_L{i}"] = _wandb.Histogram(
-                            diag["router_bias"][i]
-                        )
-                if device_type == "cuda":
-                    log["train/gpu_mem_allocated_mb"] = torch.cuda.memory_allocated(device) / 1e6
-                    log["train/gpu_mem_reserved_mb"] = torch.cuda.memory_reserved(device) / 1e6
-                wandb_run.log(log, step=step + 1)
+                       "train/tokens_trained": tokens_trained,
+                       "train/objective": avg_loss + cfg.model.aux_loss_coef * avg_aux + cfg.model.router_z_coef * avg_z,
+                       "train/amp_scale": scaler.get_scale(),
+                       "train/skipped_optimizer_steps": skipped_steps}
+                log.update(routing_metrics("train", counts=diag["expert_counts"],
+                    entropy=diag["expert_entropy"], imbalance=diag["expert_imbalance"],
+                    biases=diag["router_bias"], lambdas=diag["lambda_raw"]))
+                wandb_metrics.update(log)
             running_loss = 0.0
             running_aux = 0.0
             running_z = 0.0
             running_count = 0
-            t0 = time.time()
+            running_time = 0.0
 
         if (step + 1) % cfg.train.eval_freq == 0 or (step + 1) == cfg.train.max_steps:
             if is_main:
@@ -477,26 +482,14 @@ def main():
                 )
                 csv_file.flush()
                 if wandb_run:
-                    import wandb as _wandb
-
-                    log = {"val/nll": result.nll, "val/ppl": result.perplexity, "val/top1": result.top1_acc}
+                    log = {"val/nll": result.nll, "val/ppl": result.perplexity,
+                           "val/top1": result.top1_acc, "val/bits_per_token": result.bits_per_token}
                     if result.bits_per_byte is not None:
                         log["val/bits_per_byte"] = result.bits_per_byte
-                    for i, e in result.expert_entropy.items():
-                        log[f"val/expert_entropy_L{i}"] = e
-                        log[f"val/expert_imbalance_L{i}"] = result.expert_imbalance[i]
-                        ecounts = result.expert_counts[i]
-                        log[f"val/expert_counts_L{i}"] = _wandb.Histogram(
-                            np.repeat(np.arange(len(ecounts)), ecounts) if sum(ecounts) > 0 else [0]
-                        )
-                        if i in result.router_bias:
-                            log[f"val/router_bias_L{i}"] = _wandb.Histogram(
-                                result.router_bias[i]
-                            )
-                    for i, lam in result.lambda_values.items():
-                        log[f"val/lambda_mean_L{i}"] = sum(lam) / len(lam)
-                        log[f"val/lambda_hist_L{i}"] = _wandb.Histogram(lam)
-                    wandb_run.log(log, step=step + 1)
+                    log.update(routing_metrics("val", counts=result.expert_counts,
+                        entropy=result.expert_entropy, imbalance=result.expert_imbalance,
+                        biases=result.router_bias, lambdas=result.lambda_values))
+                    wandb_metrics.update(log)
 
                 best_ckpts.offer(step + 1, result.nll, raw_model, optimizer, scaler, gen)
                 best_val = best_ckpts.best_nll
@@ -528,6 +521,16 @@ def main():
             if args.ddp:
                 dist.barrier()
 
+        if wandb_run and wandb_metrics:
+            wandb_metrics.update(optimizer_step=step + 1)
+            wandb_metrics["train/tokens_trained"] = tokens_trained
+            if device_type == "cuda":
+                wandb_metrics["train/gpu_mem_allocated_mb"] = torch.cuda.memory_allocated(device) / 1e6
+                wandb_metrics["train/gpu_mem_reserved_mb"] = torch.cuda.memory_reserved(device) / 1e6
+                wandb_metrics["train/gpu_peak_allocated_mb"] = torch.cuda.max_memory_allocated(device) / 1e6
+                wandb_metrics["train/gpu_peak_reserved_mb"] = torch.cuda.max_memory_reserved(device) / 1e6
+            wandb_run.log(wandb_metrics)
+
     if is_main:
         wall_clock_s = time.time() - train_start
         total_tokens = tokens_per_step * cfg.train.max_steps
@@ -545,6 +548,13 @@ def main():
         if csv_file:
             csv_file.close()
         if wandb_run:
+            wandb_run.summary.update({
+                "best_val/nll": best_summary["nll"], "best_val/ppl": best_summary["ppl"],
+                "best_val/step": best_summary["step"], "training/steps": cfg.train.max_steps,
+                "training/tokens": total_tokens, "training/session_wall_clock_seconds": wall_clock_s,
+                "training/final_loss": last_avg_loss,
+                "training/session_skipped_optimizer_steps": skipped_steps,
+            })
             wandb_run.finish()
 
     if args.ddp:

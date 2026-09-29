@@ -226,6 +226,10 @@ For a larger Stable LatentMoE run on one **RTX 6000 Ada (48 GB)**, see the
 of Hugging Face FineWeb-Edu, 915M total / 405M active parameters, and a 2.15B-token
 training schedule.
 
+For automatic W&B login with a plain `python -m src.train` launch, copy
+[.env.example](.env.example) to `.env` and set `WANDB_API_KEY`. See the
+[W&B setup and metric list](configs/rtx6000ada_stable_latentmoe.md#wb-login-and-metrics).
+
 </details>
 
 <details>
