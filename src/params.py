@@ -27,12 +27,18 @@ def main():
         counts = count_params(model)
         rows.append((path, cfg.model.attention, cfg.model.ffn, counts))
 
-    header = f"{'config':<28}{'attn':<14}{'ffn':<8}{'raw':>10}{'active':>10}{'non-emb raw':>14}{'non-emb active':>16}"
+    path_width = max(28, max(len(path) for path, *_ in rows) + 2)
+    attention_width = max(14, max(len(attn) for _, attn, *_ in rows) + 2)
+    ffn_width = max(8, max(len(ffn) for _, _, ffn, _ in rows) + 2)
+    header = (
+        f"{'config':<{path_width}}{'attn':<{attention_width}}{'ffn':<{ffn_width}}"
+        f"{'raw':>10}{'active':>10}{'non-emb raw':>14}{'non-emb active':>16}"
+    )
     print(header)
     print("-" * len(header))
     for path, attn, ffn, c in rows:
         print(
-            f"{path:<28}{attn:<14}{ffn:<8}"
+            f"{path:<{path_width}}{attn:<{attention_width}}{ffn:<{ffn_width}}"
             f"{fmt(c['total']):>10}{fmt(c['active']):>10}"
             f"{fmt(c['non_embed_total']):>14}{fmt(c['non_embed_active']):>16}"
         )

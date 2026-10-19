@@ -21,7 +21,7 @@ class ModelConfig:
     rope_theta: float = 10000.0
 
     # ffn
-    ffn: Literal["dense", "moe"] = "dense"
+    ffn: Literal["dense", "moe", "stable_latent_moe"] = "dense"
     inter_dim: int = 1024  # dense SwiGLU hidden size
 
     # moe (ignored when ffn == "dense")
@@ -34,6 +34,14 @@ class ModelConfig:
     aux_loss_coef: float = 0.01
     router_z_coef: float = 0.001
 
+    # Stable LatentMoE (ignored by dense and conventional MoE). The router and
+    # shared experts stay at full model width; only routed experts use the
+    # compact latent width. None selects the Kimi-style 0.5 * dim default.
+    latent_dim: Optional[int] = None
+    situ_beta: float = 4.0
+    situ_linear_beta: float = 25.0
+    quantile_balance: bool = True
+
     norm_eps: float = 1e-6
 
     def __post_init__(self):
@@ -42,6 +50,21 @@ class ModelConfig:
             assert self.n_heads % 2 == 0, "differential attention needs even n_heads"
         head_dim = self.dim // self.n_heads
         assert head_dim % 2 == 0, "head_dim must be even for RoPE"
+        assert 1 <= self.top_k <= self.n_experts, "top_k must be in [1, n_experts]"
+        if self.ffn == "stable_latent_moe":
+            if self.latent_dim is None:
+                self.latent_dim = self.dim // 2
+            assert 0 < self.latent_dim < self.dim, "latent_dim must be between 0 and dim"
+            assert self.top_k < self.n_experts, "Quantile Balancing requires top_k < n_experts"
+            assert self.n_shared_experts > 0, "Stable LatentMoE requires full-width shared experts"
+            assert self.shared_inter_dim > 0, "shared_inter_dim must be positive"
+            assert self.situ_beta > 0 and self.situ_linear_beta > 0, "SiTU caps must be positive"
+            assert self.aux_loss_coef == 0.0, (
+                "Stable LatentMoE uses Quantile Balancing instead of an auxiliary balance loss"
+            )
+            assert self.router_z_coef == 0.0, (
+                "Stable LatentMoE's sigmoid router does not use the softmax router z-loss"
+            )
 
 
 @dataclass

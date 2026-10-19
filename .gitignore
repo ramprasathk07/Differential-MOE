@@ -11,6 +11,7 @@ WORKFLOW_PLANNER.md
 /data/
 /data_b/
 /data_s/
+/data_fineweb_edu/
 checkpoints/
 model_checkpoints/
 wandb/
@@ -151,6 +152,8 @@ celerybeat.pid
 
 # Environments
 .env
+.env.*
+!.env.example
 .envrc
 .venv
 env/

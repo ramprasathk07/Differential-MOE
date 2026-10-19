@@ -7,6 +7,7 @@ transformers      # AutoTokenizer, for pretrained frontier tokenizers (hf:<id> s
 huggingface_hub
 tqdm
 wandb
+python-dotenv     # Load W&B settings from .env for plain Python launches
 
 # dev / tests
 pytest

@@ -14,7 +14,7 @@ import torch
 import torch.nn.functional as F
 
 from src.model import Transformer
-from src.model.moe import MoE
+from src.model.moe import RoutedMoE
 
 
 def expert_stats(counts: torch.Tensor) -> tuple:
@@ -39,6 +39,7 @@ class EvalResult:
     expert_entropy: Dict[int, float] = field(default_factory=dict)
     expert_imbalance: Dict[int, float] = field(default_factory=dict)
     expert_counts: Dict[int, List[int]] = field(default_factory=dict)
+    router_bias: Dict[int, List[float]] = field(default_factory=dict)
     lambda_values: Dict[int, List[float]] = field(default_factory=dict)
 
 
@@ -64,7 +65,11 @@ def evaluate(
         total_correct += (logits.argmax(dim=-1) == y).sum().item()
         total_tokens += y.numel()
         for i, block in enumerate(model.blocks):
-            if block.is_moe and isinstance(block.ffn, MoE) and block.ffn.last_counts is not None:
+            if (
+                block.is_moe
+                and isinstance(block.ffn, RoutedMoE)
+                and block.ffn.last_counts is not None
+            ):
                 if i not in expert_counts_sum:
                     expert_counts_sum[i] = block.ffn.last_counts.clone()
                 else:
@@ -88,6 +93,8 @@ def evaluate(
         result.expert_entropy[i], result.expert_imbalance[i] = expert_stats(counts)
         result.expert_counts[i] = counts.detach().cpu().tolist()
     for i, block in enumerate(model.blocks):
+        if block.is_moe and hasattr(block.ffn.gate, "expert_bias"):
+            result.router_bias[i] = block.ffn.gate.expert_bias.detach().cpu().tolist()
         if hasattr(block.attn, "current_lambda"):
             result.lambda_values[i] = block.attn.current_lambda().detach().cpu().tolist()
 
@@ -201,6 +208,7 @@ def _main():
         "test_top1_acc": result.top1_acc,
         "expert_entropy": result.expert_entropy,
         "expert_imbalance": result.expert_imbalance,
+        "router_bias": result.router_bias,
         "lambda_means": {i: sum(v) / len(v) for i, v in result.lambda_values.items()},
         "sample_generations": generations,
     }

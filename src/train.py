@@ -13,10 +13,10 @@ Dual GPU / DDP (opt-in -- launch with torchrun, add --ddp):
 Without --ddp (and without torchrun) this always runs single-process, exactly
 as before -- --ddp is the single switch between the two modes.
 
-Note: MoE experts that receive zero tokens in a step get no gradient that step;
+Note: routed experts that receive zero tokens in a step get no gradient that step;
 vanilla DDP requires every registered parameter to participate every backward
-or it errors. We pass find_unused_parameters=True automatically for ffn=="moe"
-configs to guard against this.
+or it errors. We pass find_unused_parameters=True automatically for both routed
+FFN variants to guard against this.
 """
 
 import argparse
@@ -27,6 +27,7 @@ import os
 import random
 import subprocess
 import time
+from dataclasses import asdict
 from typing import Any, Dict
 
 import numpy as np
@@ -38,7 +39,8 @@ from torch.nn.parallel import DistributedDataParallel
 from src.data import eval_batches, get_batch, load_tokens
 from src.eval import bytes_per_token_estimate, evaluate, expert_stats
 from src.model import Config, Transformer, count_params
-from src.model.moe import MoE
+from src.model.moe import RoutedMoE
+from src.tracking import env_flag, init_wandb, load_training_env, routing_metrics
 
 
 def set_seed(seed: int):
@@ -74,7 +76,9 @@ def configure_optimizer(model: torch.nn.Module, train_cfg) -> torch.optim.Optimi
     return torch.optim.AdamW(groups, lr=train_cfg.lr, betas=(train_cfg.beta1, train_cfg.beta2))
 
 
-def save_checkpoint(path, model, optimizer, scaler, step, rng_state, best_val):
+def save_checkpoint(
+    path, model, optimizer, scaler, step, rng_state, best_val, model_config=None
+):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     torch.save(
         {
@@ -84,6 +88,7 @@ def save_checkpoint(path, model, optimizer, scaler, step, rng_state, best_val):
             "step": step,
             "rng_state": rng_state,
             "best_val": best_val,
+            "model_config": asdict(model_config) if model_config is not None else None,
         },
         path,
     )
@@ -94,10 +99,11 @@ class BestCheckpoints:
     the rest as better ones arrive. Separate from last.pt (always kept, for
     plain resume regardless of quality)."""
 
-    def __init__(self, run_dir: str, max_keep: int = 2):
+    def __init__(self, run_dir: str, max_keep: int = 2, model_config=None):
         self.dir = os.path.join(run_dir, "best")
         self.index_path = os.path.join(run_dir, "best_index.json")
         self.max_keep = max_keep
+        self.model_config = model_config
         os.makedirs(self.dir, exist_ok=True)
         self.entries = []
         if os.path.exists(self.index_path):
@@ -108,7 +114,16 @@ class BestCheckpoints:
         if len(self.entries) >= self.max_keep and nll >= self.entries[-1]["nll"]:
             return False
         path = os.path.join(self.dir, f"step{step}_nll{nll:.4f}.pt")
-        save_checkpoint(path, model, optimizer, scaler, step, gen.get_state(), nll)
+        save_checkpoint(
+            path,
+            model,
+            optimizer,
+            scaler,
+            step,
+            gen.get_state(),
+            nll,
+            self.model_config,
+        )
         self.entries.append({"step": step, "nll": nll, "path": path})
         self.entries.sort(key=lambda e: e["nll"])
         while len(self.entries) > self.max_keep:
@@ -128,18 +143,30 @@ def train_time_diagnostics(raw_model: Transformer) -> Dict[str, Any]:
     """Cheap, forward-pass-free (lambda) or forward-pass-piggybacked (expert
     routing, from the last training micro-batch) diagnostics -- safe to compute
     every log_freq step, not just at eval_freq."""
-    diag: Dict[str, Any] = {"lambda_means": {}, "lambda_raw": {}, "expert_entropy": {},
-                             "expert_imbalance": {}, "expert_counts": {}}
+    diag: Dict[str, Any] = {
+        "lambda_means": {},
+        "lambda_raw": {},
+        "expert_entropy": {},
+        "expert_imbalance": {},
+        "expert_counts": {},
+        "router_bias": {},
+    }
     for i, block in enumerate(raw_model.blocks):
         if hasattr(block.attn, "current_lambda"):
             lam = block.attn.current_lambda().detach().cpu().tolist()
             diag["lambda_raw"][i] = lam
             diag["lambda_means"][i] = sum(lam) / len(lam)
-        if block.is_moe and isinstance(block.ffn, MoE) and block.ffn.last_counts is not None:
+        if (
+            block.is_moe
+            and isinstance(block.ffn, RoutedMoE)
+            and block.ffn.last_counts is not None
+        ):
             entropy, imbalance = expert_stats(block.ffn.last_counts)
             diag["expert_entropy"][i] = entropy
             diag["expert_imbalance"][i] = imbalance
             diag["expert_counts"][i] = block.ffn.last_counts.detach().cpu().tolist()
+            if hasattr(block.ffn.gate, "expert_bias"):
+                diag["router_bias"][i] = block.ffn.gate.expert_bias.detach().cpu().tolist()
     return diag
 
 
@@ -159,17 +186,7 @@ def write_report(path, cfg, counts, world_size, tokens_trained, steps_trained,
         "git_commit": git_commit(),
         "seed": cfg.train.seed,
         "world_size": world_size,
-        "model": {
-            "attention": cfg.model.attention,
-            "ffn": cfg.model.ffn,
-            "dim": cfg.model.dim,
-            "n_layers": cfg.model.n_layers,
-            "n_heads": cfg.model.n_heads,
-            "vocab_size": cfg.model.vocab_size,
-            "seq_len": cfg.model.seq_len,
-            "n_experts": cfg.model.n_experts if cfg.model.ffn == "moe" else None,
-            "top_k": cfg.model.top_k if cfg.model.ffn == "moe" else None,
-        },
+        "model": asdict(cfg.model),
         "params": {k: v for k, v in counts.items()},
         "training": {
             "steps_trained": steps_trained,
@@ -189,8 +206,13 @@ def write_report(path, cfg, counts, world_size, tokens_trained, steps_trained,
     return report
 
 
-def main():
+def parse_args(argv=None):
+    env_parser = argparse.ArgumentParser(add_help=False)
+    env_parser.add_argument("--env_file", default=None)
+    env_args, _ = env_parser.parse_known_args(argv)
+    load_training_env(env_args.env_file)
     ap = argparse.ArgumentParser()
+    ap.add_argument("--env_file", default=None, help="defaults to .env in the repository root")
     ap.add_argument("--config", type=str, required=True)
     ap.add_argument("--data_dir", type=str, default=None, help="overrides config's data_dir")
     ap.add_argument("--out_dir", type=str, default="checkpoints")
@@ -199,11 +221,22 @@ def main():
                      help="ignored when --ddp is set (device is derived from LOCAL_RANK)")
     ap.add_argument("--ddp", action="store_true",
                      help="enable multi-GPU DistributedDataParallel; launch via torchrun")
-    ap.add_argument("--wandb", action="store_true")
-    ap.add_argument("--wandb_project", type=str, default="diff-moe",
+    ap.add_argument("--wandb", action=argparse.BooleanOptionalAction, default=env_flag("WANDB_ENABLED"),
+                     help="enable W&B; defaults to WANDB_ENABLED from the environment/.env")
+    ap.add_argument("--wandb_project", type=str, default=os.environ.get("WANDB_PROJECT") or "diff-moe",
                      help="wandb project name -- change per Kaggle run without editing code")
+    ap.add_argument("--wandb_entity", default=os.environ.get("WANDB_ENTITY") or None)
+    ap.add_argument("--wandb_mode", choices=["online", "offline", "disabled"],
+                     default=os.environ.get("WANDB_MODE") or "online")
     ap.add_argument("--max_steps", type=int, default=None, help="override, e.g. for smoke tests")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
+    if args.wandb_mode not in ("online", "offline", "disabled"):
+        ap.error("WANDB_MODE must be online, offline, or disabled")
+    return args
+
+
+def main():
+    args = parse_args()
 
     local_rank = None
     if args.ddp:
@@ -253,7 +286,9 @@ def main():
               f"world_size={world_size}")
 
     if args.ddp:
-        ddp_kwargs: Dict[str, Any] = {"find_unused_parameters": cfg.model.ffn == "moe"}
+        ddp_kwargs: Dict[str, Any] = {
+            "find_unused_parameters": cfg.model.ffn in ("moe", "stable_latent_moe")
+        }
         if local_rank is not None:
             ddp_kwargs["device_ids"] = [local_rank]
         model = DistributedDataParallel(raw_model, **ddp_kwargs)
@@ -262,7 +297,11 @@ def main():
 
     optimizer = configure_optimizer(raw_model, cfg.train)
     scaler = torch.amp.GradScaler(device_type, enabled=(cfg.train.amp and device_type == "cuda"))
-    best_ckpts = BestCheckpoints(run_dir, max_keep=cfg.train.max_best_checkpoints)
+    best_ckpts = BestCheckpoints(
+        run_dir,
+        max_keep=cfg.train.max_best_checkpoints,
+        model_config=cfg.model,
+    )
 
     start_step = 0
     best_val = best_ckpts.best_nll
@@ -320,9 +359,7 @@ def main():
 
     wandb_run = None
     if args.wandb and is_main:
-        import wandb
-
-        wandb_run = wandb.init(project=args.wandb_project, name=cfg.run_name, config=vars(cfg.train))
+        wandb_run = init_wandb(args, cfg, counts, world_size, run_dir, resuming=bool(resume_path))
 
     csv_writer = csv_file = None
     if is_main:
@@ -338,8 +375,9 @@ def main():
     tokens_per_step = cfg.train.batch_size * cfg.model.seq_len * cfg.train.accum_steps * world_size
 
     model.train()
-    t0 = time.time()
     train_start = time.time()
+    running_time = 0.0
+    skipped_steps = 0
     running_loss = 0.0
     running_aux = 0.0
     running_z = 0.0
@@ -347,6 +385,8 @@ def main():
     last_avg_loss = None
 
     for step in range(start_step, cfg.train.max_steps):
+        step_start = time.perf_counter()
+        wandb_metrics = {}
         optimizer.zero_grad(set_to_none=True)
         lr = lr_at(step, cfg.train, cfg.train.lr)
         for g in optimizer.param_groups:
@@ -369,24 +409,27 @@ def main():
 
         scaler.unscale_(optimizer)
         grad_norm = torch.nn.utils.clip_grad_norm_(raw_model.parameters(), cfg.train.grad_clip)
+        previous_scale = scaler.get_scale()
         scaler.step(optimizer)
         scaler.update()
+        skipped_steps += int(scaler.get_scale() < previous_scale)
+        # Biases derived from optimizer step t are committed only after every
+        # accumulated micro-batch, so they first affect step t+1.
+        raw_model.update_quantile_balancing()
 
         running_loss += step_loss
         running_aux += step_aux
         running_z += step_z
         running_count += 1
+        running_time += time.perf_counter() - step_start
         tokens_trained = tokens_per_step * (step + 1)
 
-        if is_main and (step + 1) % cfg.train.log_freq == 0:
+        if is_main and ((step + 1) % cfg.train.log_freq == 0 or (step + 1) == cfg.train.max_steps):
             avg_loss = running_loss / running_count
             avg_aux = running_aux / running_count
             avg_z = running_z / running_count
             last_avg_loss = avg_loss
-            elapsed = time.time() - t0
-            tok_per_sec = (
-                cfg.train.batch_size * cfg.model.seq_len * cfg.train.accum_steps * world_size * cfg.train.log_freq
-            ) / elapsed
+            tok_per_sec = tokens_per_step * running_count / max(running_time, 1e-9)
             ppl = math.exp(min(avg_loss, 50))
             diag = train_time_diagnostics(raw_model)
             diag_summary = ""
@@ -407,31 +450,22 @@ def main():
             )
             csv_file.flush()
             if wandb_run:
-                import wandb as _wandb
-
                 log = {"train/loss": avg_loss, "train/ppl": ppl, "train/aux_loss": avg_aux,
                        "train/router_z_loss": avg_z, "train/lr": lr,
                        "train/grad_norm": grad_norm.item(), "train/tok_per_sec": tok_per_sec,
-                       "train/tokens_trained": tokens_trained}
-                for i, mean_lam_i in diag["lambda_means"].items():
-                    log[f"train/lambda_mean_L{i}"] = mean_lam_i
-                    log[f"train/lambda_hist_L{i}"] = _wandb.Histogram(diag["lambda_raw"][i])
-                for i, e in diag["expert_entropy"].items():
-                    log[f"train/expert_entropy_L{i}"] = e
-                    log[f"train/expert_imbalance_L{i}"] = diag["expert_imbalance"][i]
-                    log[f"train/expert_counts_L{i}"] = _wandb.Histogram(
-                        np.repeat(np.arange(len(diag["expert_counts"][i])), diag["expert_counts"][i])
-                        if sum(diag["expert_counts"][i]) > 0 else [0]
-                    )
-                if device_type == "cuda":
-                    log["train/gpu_mem_allocated_mb"] = torch.cuda.memory_allocated(device) / 1e6
-                    log["train/gpu_mem_reserved_mb"] = torch.cuda.memory_reserved(device) / 1e6
-                wandb_run.log(log, step=step + 1)
+                       "train/tokens_trained": tokens_trained,
+                       "train/objective": avg_loss + cfg.model.aux_loss_coef * avg_aux + cfg.model.router_z_coef * avg_z,
+                       "train/amp_scale": scaler.get_scale(),
+                       "train/skipped_optimizer_steps": skipped_steps}
+                log.update(routing_metrics("train", counts=diag["expert_counts"],
+                    entropy=diag["expert_entropy"], imbalance=diag["expert_imbalance"],
+                    biases=diag["router_bias"], lambdas=diag["lambda_raw"]))
+                wandb_metrics.update(log)
             running_loss = 0.0
             running_aux = 0.0
             running_z = 0.0
             running_count = 0
-            t0 = time.time()
+            running_time = 0.0
 
         if (step + 1) % cfg.train.eval_freq == 0 or (step + 1) == cfg.train.max_steps:
             if is_main:
@@ -448,34 +482,54 @@ def main():
                 )
                 csv_file.flush()
                 if wandb_run:
-                    import wandb as _wandb
-
-                    log = {"val/nll": result.nll, "val/ppl": result.perplexity, "val/top1": result.top1_acc}
+                    log = {"val/nll": result.nll, "val/ppl": result.perplexity,
+                           "val/top1": result.top1_acc, "val/bits_per_token": result.bits_per_token}
                     if result.bits_per_byte is not None:
                         log["val/bits_per_byte"] = result.bits_per_byte
-                    for i, e in result.expert_entropy.items():
-                        log[f"val/expert_entropy_L{i}"] = e
-                        log[f"val/expert_imbalance_L{i}"] = result.expert_imbalance[i]
-                        ecounts = result.expert_counts[i]
-                        log[f"val/expert_counts_L{i}"] = _wandb.Histogram(
-                            np.repeat(np.arange(len(ecounts)), ecounts) if sum(ecounts) > 0 else [0]
-                        )
-                    for i, lam in result.lambda_values.items():
-                        log[f"val/lambda_mean_L{i}"] = sum(lam) / len(lam)
-                        log[f"val/lambda_hist_L{i}"] = _wandb.Histogram(lam)
-                    wandb_run.log(log, step=step + 1)
+                    log.update(routing_metrics("val", counts=result.expert_counts,
+                        entropy=result.expert_entropy, imbalance=result.expert_imbalance,
+                        biases=result.router_bias, lambdas=result.lambda_values))
+                    wandb_metrics.update(log)
 
                 best_ckpts.offer(step + 1, result.nll, raw_model, optimizer, scaler, gen)
                 best_val = best_ckpts.best_nll
-                save_checkpoint(ckpt_path, raw_model, optimizer, scaler, step + 1, gen.get_state(), best_val)
+                save_checkpoint(
+                    ckpt_path,
+                    raw_model,
+                    optimizer,
+                    scaler,
+                    step + 1,
+                    gen.get_state(),
+                    best_val,
+                    cfg.model,
+                )
                 model.train()
             if args.ddp:
                 dist.barrier()
         elif (step + 1) % cfg.train.ckpt_freq == 0 or (step + 1) == cfg.train.max_steps:
             if is_main:
-                save_checkpoint(ckpt_path, raw_model, optimizer, scaler, step + 1, gen.get_state(), best_val)
+                save_checkpoint(
+                    ckpt_path,
+                    raw_model,
+                    optimizer,
+                    scaler,
+                    step + 1,
+                    gen.get_state(),
+                    best_val,
+                    cfg.model,
+                )
             if args.ddp:
                 dist.barrier()
+
+        if wandb_run and wandb_metrics:
+            wandb_metrics.update(optimizer_step=step + 1)
+            wandb_metrics["train/tokens_trained"] = tokens_trained
+            if device_type == "cuda":
+                wandb_metrics["train/gpu_mem_allocated_mb"] = torch.cuda.memory_allocated(device) / 1e6
+                wandb_metrics["train/gpu_mem_reserved_mb"] = torch.cuda.memory_reserved(device) / 1e6
+                wandb_metrics["train/gpu_peak_allocated_mb"] = torch.cuda.max_memory_allocated(device) / 1e6
+                wandb_metrics["train/gpu_peak_reserved_mb"] = torch.cuda.max_memory_reserved(device) / 1e6
+            wandb_run.log(wandb_metrics)
 
     if is_main:
         wall_clock_s = time.time() - train_start
@@ -494,6 +548,13 @@ def main():
         if csv_file:
             csv_file.close()
         if wandb_run:
+            wandb_run.summary.update({
+                "best_val/nll": best_summary["nll"], "best_val/ppl": best_summary["ppl"],
+                "best_val/step": best_summary["step"], "training/steps": cfg.train.max_steps,
+                "training/tokens": total_tokens, "training/session_wall_clock_seconds": wall_clock_s,
+                "training/final_loss": last_avg_loss,
+                "training/session_skipped_optimizer_steps": skipped_steps,
+            })
             wandb_run.finish()
 
     if args.ddp:
