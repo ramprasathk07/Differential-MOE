@@ -230,17 +230,24 @@ For automatic W&B login with a plain `python -m src.train` launch, copy
 [.env.example](.env.example) to `.env` and set `WANDB_API_KEY`. See the
 [W&B setup and metric list](configs/rtx6000ada_stable_latentmoe.md#wb-login-and-metrics).
 
+**L tier (scale-up, in progress).** Six 0.78B-active cells (2.0B total for MoE)
+at 4096 context on SlimPajama, with Derf, Block AttnRes, XSA and document
+masking switched on, trained with FSDP2 on 1–4 GPUs (`--gpus 0,1,2,3`) and
+evaluated on a 12 GB RTX 3060 (`scripts/eval_l.py`). Run guide:
+[configs/l_tier.md](configs/l_tier.md).
+
 </details>
 
 <details>
 <summary><b>📁 Project structure & tests</b></summary>
 
 ```
-configs/      the 2×2 at three scales (a_*, s_*, b_final)
+configs/      the 2×2 at four scales (a_*, s_*, b_final, l_* + l_tier.md)
 src/
-  model/      attention.py (both variants) · moe.py · block.py · transformer.py
+  model/      attention.py (both variants, XSA, Derf/DyT) · residual.py (AttnRes, mHC)
+              moe.py · block.py · transformer.py
   data/       babylm.py · tokenizer.py · prepare.py · verify.py · dataset.py
-  train.py    AMP, accumulation, checkpoint/resume, DDP, W&B
+  train.py    AMP, accumulation, checkpoint/resume, DDP/FSDP2, --gpus, W&B, MLflow
   eval.py     NLL, ppl, bits/byte, expert utilization, λ logging
   params.py   raw vs active parameter accounting
 scripts/      the evaluation battery + figure generation (see Reproduce)

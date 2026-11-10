@@ -1,0 +1,5 @@
+# L tier, Diff-Dense: differential attention (12 heads x 128) + dense SwiGLU.
+base: l_base.yaml
+run_name: l_diff
+model:
+  attention: differential

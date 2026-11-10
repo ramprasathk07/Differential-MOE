@@ -28,8 +28,9 @@ The conservative microbatch leaves substantial room within 48 GB, but peak
 VRAM has **not been measured on an RTX 6000 Ada**. The recipe uses the existing
 training path without activation checkpointing or CPU offload.
 
-The trainer currently hardcodes FP16. Adding a `bf16` YAML key will not enable
-BF16. Evaluation uses FP32 with the same microbatch. Keep standard attention
+This recipe keeps FP16 (`train.precision` defaults to `fp16`); set
+`precision: bf16` to drop the GradScaler on Ada, or see `l_tier.md` for the
+multi-GPU FSDP2 path. Evaluation uses FP32 with the same microbatch. Keep standard attention
 for this initial run so it uses the existing SDPA path.
 
 Allow at least **40 GB of free disk** for prepared data, checkpoints, and a

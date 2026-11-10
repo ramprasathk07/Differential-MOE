@@ -1,0 +1,81 @@
+# L tier, shared by every l_*.yaml cell (`base: l_base.yaml`). Sized for 48 GB GPUs:
+# the largest MoE cell (~2.0B total params, 32 GiB of fp32 weights+grads+AdamW)
+# still fits ONE 48 GB card with activation checkpointing at micro-batch 2x4096;
+# on 4 GPUs FSDP2 shards that state 4 ways. The optimizer batch is identical
+# on 1, 2 or 4 GPUs (global_batch_tokens), so runs are comparable and resumable
+# across GPU counts. Run guide: configs/l_tier.md
+data_dir: data_l
+
+# Consumed by `python -m src.data.prepare_hf --config configs/l_base.yaml`.
+data:
+  dataset: cerebras/SlimPajama-627B
+  subset: null
+  revision: main          # pin to a commit sha once prepared, for exact reproduction
+  split: train
+  text_column: text
+  source_column: meta.redpajama_set_name
+  sources: [RedPajamaCommonCrawl, RedPajamaC4, RedPajamaGithub, RedPajamaBook,
+            RedPajamaArXiv, RedPajamaWikipedia, RedPajamaStackExchange]
+  tokenizer: tokenizers/slimpajama_bpe32k.json   # from src.data.train_tokenizer --hf_config
+  train_tokens: 12000000000   # 12B on disk (24 GB uint16); training samples 10B, so
+                              # upweighted sources repeat ~2x while web stays mostly unique
+  val_tokens: 1000000         # PER SOURCE (contiguous span each) -> per-source val curves
+  test_tokens: 2000000        # PER SOURCE; long-context eval cuts windows from these
+  val_fraction: 0.005
+  test_fraction: 0.005
+  shuffle_buffer: 10000
+  seed: 42
+
+model:
+  vocab_size: 32768       # byte-level BPE fit to SlimPajama; uint16 storage
+  dim: 1536
+  n_layers: 24
+  n_heads: 24             # standard: 24 x 64; differential: 12 x 128 (same 4*d^2)
+  seq_len: 4096
+  tie_embeddings: false
+  attention: standard
+  rope_theta: 10000.0
+  ffn: dense
+  inter_dim: 4096         # dense SwiGLU
+  n_dense_layers: 2       # MoE cells keep the first 2 layers dense, as in the S tier
+  norm_eps: 1.0e-6
+
+  # incremental architecture options, on in every L cell
+  norm: derf              # Derf replaces pre-attn, pre-FFN and final RMSNorm
+  norm_alpha_init: 0.5
+  residual: attnres       # Block AttnRes; `mhc` is the alternative (not combinable)
+  attnres_block_layers: 3 # 24 layers -> 8 blocks
+  mhc_streams: 4
+  mhc_sinkhorn_iters: 20
+  xsa: true               # Exclusive Self Attention
+  doc_mask: true          # no attention across document boundaries
+  eos_id: 0               # <|endoftext|> is the first special token of the trained BPE
+
+train:
+  batch_size: 2           # sequences per GPU per micro-batch (2 x 4096 tokens)
+  global_batch_tokens: 524288   # 0.5M tokens/step -> accum 64 / 32 / 16 on 1 / 2 / 4 GPUs
+  max_steps: 19073        # 19073 x 524288 = 10.0B tokens (~14 tokens per active param)
+  lr: 3.0e-4              # confirm with a short sweep before the first full run
+  min_lr_ratio: 0.1
+  warmup_steps: 2000
+  weight_decay: 0.1
+  grad_clip: 1.0
+  beta1: 0.9
+  beta2: 0.95
+  amp: true
+  precision: bf16         # bf16 params/compute, fp32 grad reduce + AdamW state
+  compile: true           # if a torch/driver combo misbehaves: --override train.compile=false
+  activation_checkpointing: true
+  log_freq: 10
+  eval_freq: 500
+  eval_batches: 64        # 128 val windows (0.5M tokens) split across sources and GPUs
+  ckpt_freq: 250          # full last.pt for resume (~32 GB for MoE cells)
+  max_best_checkpoints: 2
+  snapshot_freq: 2000     # weights-only, kept forever (training-dynamics analysis)
+  source_weights:         # long-document sources upweighted at sampling time
+    RedPajamaBook: 3.0
+    RedPajamaArXiv: 2.0
+    RedPajamaGithub: 2.0
+    RedPajamaWikipedia: 2.0
+  peak_tflops: 364.0      # RTX 6000 Ada dense BF16, for MFU; set to your card's spec
+  seed: 42

@@ -69,7 +69,7 @@ def _causal_mask(S, device):
     return torch.ones(S, S, dtype=torch.bool, device=device).tril()
 
 
-def std_forward(self, x, rope):
+def std_forward(self, x, rope, mask=None):  # S-tier: no doc mask
     B, S, D = x.shape
     q = self.wq(x).view(B, S, self.n_heads, self.head_dim)
     k = self.wk(x).view(B, S, self.n_heads, self.head_dim)
@@ -87,7 +87,7 @@ def std_forward(self, x, rope):
     return self.wo(o)
 
 
-def diff_forward(self, x, rope):
+def diff_forward(self, x, rope, mask=None):
     B, S, D = x.shape
     H, hd = self.n_heads, self.head_dim
     q = self.wq(x).view(B, S, H, 2 * hd)
