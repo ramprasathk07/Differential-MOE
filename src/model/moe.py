@@ -88,7 +88,7 @@ class Gate(nn.Module):
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         # router math in fp32 regardless of autocast
-        logits = F.linear(x.float(), self.weight)
+        logits = F.linear(x.float(), self.weight.float())  # FSDP may hold bf16 params
         probs = logits.softmax(dim=-1)
         top_probs, top_idx = probs.topk(self.top_k, dim=-1)
         weights = top_probs / top_probs.sum(dim=-1, keepdim=True)
@@ -128,9 +128,9 @@ class MoE(RoutedMoE):
 
         out = torch.zeros_like(xf)
         for e in range(self.n_experts):
+            # An empty expert still runs on zero rows: every parameter joins the
+            # graph, so DDP/FSDP never see an unused parameter.
             tok, slot = torch.where(idx == e)
-            if tok.numel() == 0:
-                continue
             out[tok] += self.experts[e](xf[tok]) * weights[tok, slot, None]
         if self.shared is not None:
             out = out + self.shared(xf)
@@ -163,7 +163,7 @@ class QuantileBalancedSigmoidGate(nn.Module):
         self._pending_margins: List[torch.Tensor] = []
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        logits = F.linear(x.float(), self.weight)
+        logits = F.linear(x.float(), self.weight.float())  # FSDP may hold bf16 params
         scores = logits.sigmoid()
         biased_scores = scores + self.expert_bias
 
@@ -174,6 +174,9 @@ class QuantileBalancedSigmoidGate(nn.Module):
             top_idx = candidate_idx[:, : self.top_k]
             cutoff = candidates[:, self.top_k]
             # Raw score minus the biased token cutoff, exactly as Eq. 14.
+            # shortcut: activation-checkpoint recompute appends each micro-batch twice;
+            # duplicating every row leaves the kth-value quantile unchanged, only memory
+            # doubles (~MBs). Dedupe here if margins ever get large.
             self._pending_margins.append((scores - cutoff[:, None]).detach())
         else:
             top_idx = biased_scores.topk(self.top_k, dim=-1, sorted=False).indices
@@ -273,9 +276,9 @@ class StableLatentMoE(RoutedMoE):
 
         routed = torch.zeros_like(latent)
         for e in range(self.n_experts):
+            # An empty expert still runs on zero rows: every parameter joins the
+            # graph, so DDP/FSDP never see an unused parameter.
             tok, slot = torch.where(idx == e)
-            if tok.numel() == 0:
-                continue
             routed[tok] += self.experts[e](latent[tok]) * weights[tok, slot, None]
 
         routed = self.routed_expert_up_proj(self.routed_expert_norm(routed))
