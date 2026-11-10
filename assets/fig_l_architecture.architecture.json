@@ -1,0 +1,252 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Differential-MoE L tier: one forward pass",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1200,
+      560
+    ],
+    "legend": {
+      "mode": "auto",
+      "entries": {
+        "external": {
+          "label": "Data"
+        },
+        "frontend": {
+          "label": "Input / output"
+        },
+        "messagebus": {
+          "label": "Depth mixing"
+        },
+        "backend": {
+          "label": "Sublayer"
+        },
+        "database": {
+          "label": "Residual store"
+        },
+        "security": {
+          "label": "Mask"
+        }
+      }
+    }
+  },
+  "components": [
+    {
+      "id": "tokens",
+      "type": "external",
+      "label": "Tokens",
+      "sublabel": "32K byte-BPE · 4096 ctx",
+      "pos": [
+        40,
+        250
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "embed",
+      "type": "frontend",
+      "label": "Embedding",
+      "sublabel": "d = 1536 · untied",
+      "pos": [
+        230,
+        250
+      ],
+      "size": [
+        140,
+        64
+      ]
+    },
+    {
+      "id": "mix",
+      "type": "messagebus",
+      "label": "AttnRes mix",
+      "sublabel": "before each sublayer",
+      "pos": [
+        430,
+        250
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "attn",
+      "type": "backend",
+      "label": "Attention + XSA",
+      "sublabel": "std 24×64 | diff 12×128",
+      "pos": [
+        640,
+        250
+      ],
+      "size": [
+        170,
+        64
+      ]
+    },
+    {
+      "id": "ffn",
+      "type": "backend",
+      "label": "FFN",
+      "sublabel": "dense | MoE | LatentMoE",
+      "pos": [
+        870,
+        250
+      ],
+      "size": [
+        170,
+        64
+      ]
+    },
+    {
+      "id": "reps",
+      "type": "database",
+      "label": "Block reps",
+      "sublabel": "8 blocks × 3 layers",
+      "pos": [
+        430,
+        420
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "docmask",
+      "type": "security",
+      "label": "Doc mask",
+      "sublabel": "EOS → block mask",
+      "pos": [
+        640,
+        90
+      ],
+      "size": [
+        170,
+        64
+      ]
+    },
+    {
+      "id": "head",
+      "type": "frontend",
+      "label": "LM head",
+      "sublabel": "AttnRes · Derf · 32K",
+      "pos": [
+        1050,
+        420
+      ],
+      "size": [
+        140,
+        64
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "× 24 layers",
+      "wraps": [
+        "mix",
+        "attn",
+        "ffn",
+        "reps"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "tok-embed",
+      "from": "tokens",
+      "to": "embed",
+      "variant": "emphasis"
+    },
+    {
+      "id": "embed-reps",
+      "from": "embed",
+      "to": "reps",
+      "label": "source 0",
+      "fromSide": "bottom",
+      "toSide": "left"
+    },
+    {
+      "id": "reps-mix",
+      "from": "reps",
+      "to": "mix",
+      "label": "softmax over depth",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "mix-attn",
+      "from": "mix",
+      "to": "attn",
+      "variant": "emphasis"
+    },
+    {
+      "id": "attn-ffn",
+      "from": "attn",
+      "to": "ffn",
+      "variant": "emphasis"
+    },
+    {
+      "id": "ffn-reps",
+      "from": "ffn",
+      "to": "reps",
+      "label": "block sum",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "right"
+    },
+    {
+      "id": "mask-attn",
+      "from": "docmask",
+      "to": "attn",
+      "label": "no cross-doc",
+      "variant": "security",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 24
+    },
+    {
+      "id": "ffn-head",
+      "from": "ffn",
+      "to": "head",
+      "label": "after layer 24",
+      "fromSide": "right",
+      "toSide": "top"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Six cells",
+      "items": [
+        "{std, diff} attention × {dense, MoE, LatentMoE} FFN",
+        "780M active; MoE cells 2.0B total"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "New in L",
+      "items": [
+        "Derf replaces every pre-norm",
+        "Block AttnRes replaces x + f(x)",
+        "XSA + document masking"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Training",
+      "items": [
+        "FSDP2 on 1–4 GPUs, bf16",
+        "0.5M tokens/step, 10B tokens"
+      ]
+    }
+  ]
+}

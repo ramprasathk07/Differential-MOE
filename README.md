@@ -236,6 +236,10 @@ masking switched on, trained with FSDP2 on 1–4 GPUs (`--gpus 0,1,2,3`) and
 evaluated on a 12 GB RTX 3060 (`scripts/eval_l.py`). Run guide:
 [configs/l_tier.md](configs/l_tier.md).
 
+![L-tier forward pass: tokens → embedding → 24 layers of AttnRes mix → attention + XSA → FFN, with block representations mixed over depth and a document mask on attention](assets/fig_l_architecture.png)
+
+<sub>Interactive version: [assets/fig_l_architecture.html](assets/fig_l_architecture.html) (download and open locally) · source: [fig_l_architecture.architecture.json](assets/fig_l_architecture.architecture.json), rendered with Archify.</sub>
+
 </details>
 
 <details>
