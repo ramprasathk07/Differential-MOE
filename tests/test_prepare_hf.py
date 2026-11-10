@@ -95,7 +95,7 @@ def test_vocab_mismatch_fails_before_writing(tmp_path, corpus):
 
 def test_invalid_token_cannot_wrap_into_uint16(tmp_path, corpus, monkeypatch):
     tok, settings, rows = corpus
-    monkeypatch.setattr(tok, "encode", lambda text: [65536])
+    monkeypatch.setattr(tok, "encode_batch", lambda texts: [[65536] for _ in texts])
     out = tmp_path / "overflow"
     with pytest.raises(ValueError, match="outside the tokenizer vocabulary"):
         prepare_rows(rows, tok, out, settings, model_vocab=tok.vocab_size, seq_len=4)

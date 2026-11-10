@@ -1,4 +1,4 @@
-torch>=2.1.0
+torch>=2.6.0      # FSDP2 fully_shard, FlexAttention, DCP state-dict APIs
 pyyaml
 numpy
 datasets
@@ -8,6 +8,8 @@ huggingface_hub
 tqdm
 wandb
 python-dotenv     # Load W&B settings from .env for plain Python launches
+mlflow            # run + checkpoint lineage (src/tracking.py MLflowTracker)
+zstandard         # SlimPajama-627B ships .jsonl.zst shards
 
 # dev / tests
 pytest

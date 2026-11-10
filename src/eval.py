@@ -8,7 +8,7 @@ the raw byte length of the text the evaluated tokens came from, so callers pass
 
 import math
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence
 
 import torch
 import torch.nn.functional as F
@@ -29,6 +29,19 @@ def expert_stats(counts: torch.Tensor) -> tuple:
     return entropy / math.log(n_experts), imbalance
 
 
+def full_tensor(t: torch.Tensor) -> torch.Tensor:
+    """Gather an FSDP2 DTensor (collective: call on every rank); plain tensors pass through."""
+    return t.full_tensor() if hasattr(t, "full_tensor") else t
+
+
+def _all_reduce(t: torch.Tensor) -> torch.Tensor:
+    import torch.distributed as dist
+
+    if dist.is_available() and dist.is_initialized():
+        dist.all_reduce(t)
+    return t
+
+
 @dataclass
 class EvalResult:
     nll: float
@@ -41,6 +54,8 @@ class EvalResult:
     expert_counts: Dict[int, List[int]] = field(default_factory=dict)
     router_bias: Dict[int, List[float]] = field(default_factory=dict)
     lambda_values: Dict[int, List[float]] = field(default_factory=dict)
+    per_source: Dict[str, Dict[str, float]] = field(default_factory=dict)
+    nll_by_position: List[float] = field(default_factory=list)  # one value per position bucket
 
 
 @torch.no_grad()
@@ -48,46 +63,74 @@ def evaluate(
     model: Transformer,
     batches,
     bytes_per_token: Optional[float] = None,
+    *,
+    source_names: Sequence[str] = (),
+    position_buckets: int = 0,
 ) -> EvalResult:
+    """Batches yield (x, y) or (x, y, source_names). Under torch.distributed every
+    rank evaluates its own shard of windows and the sums are all-reduced, so every
+    rank returns the same global result (FSDP needs all ranks in the forward)."""
     model.eval()
-    total_nll = 0.0
-    total_correct = 0
-    total_tokens = 0
+    dev = next(model.parameters()).device
+    names = list(source_names)
+    sums = torch.zeros(3, dtype=torch.float64, device=dev)  # nll, correct, tokens
+    src_sums = torch.zeros(len(names), 2, dtype=torch.float64, device=dev)
+    pos_sums = None
     # accumulated across every eval batch, not just the last one -- last_counts
     # gets overwritten each forward call, so this has to be summed here
-    expert_counts_sum: Dict[int, torch.Tensor] = {}
+    expert_counts_sum: Dict[int, torch.Tensor] = {
+        i: torch.zeros(b.ffn.n_experts, dtype=torch.long, device=dev)
+        for i, b in enumerate(model.blocks) if b.is_moe and isinstance(b.ffn, RoutedMoE)
+    }
 
-    for x, y in batches:
+    for batch in batches:
+        x, y = batch[0], batch[1]
         logits, _, _ = model(x)
         logits = logits.float()
-        loss = F.cross_entropy(logits.view(-1, logits.size(-1)), y.view(-1), reduction="sum")
-        total_nll += loss.item()
-        total_correct += (logits.argmax(dim=-1) == y).sum().item()
-        total_tokens += y.numel()
-        for i, block in enumerate(model.blocks):
-            if (
-                block.is_moe
-                and isinstance(block.ffn, RoutedMoE)
-                and block.ffn.last_counts is not None
-            ):
-                if i not in expert_counts_sum:
-                    expert_counts_sum[i] = block.ffn.last_counts.clone()
-                else:
-                    expert_counts_sum[i] += block.ffn.last_counts
+        tok_nll = F.cross_entropy(logits.view(-1, logits.size(-1)), y.view(-1), reduction="none").view(y.shape)
+        sums += torch.stack([tok_nll.sum().double(), (logits.argmax(-1) == y).sum().double(),
+                             torch.tensor(float(y.numel()), dtype=torch.float64, device=dev)])
+        if pos_sums is None:
+            pos_sums = torch.zeros(y.size(1), dtype=torch.float64, device=dev)
+            pos_count = torch.zeros((), dtype=torch.float64, device=dev)
+        pos_sums += tok_nll.sum(0).double()
+        pos_count += y.size(0)
+        if names and len(batch) > 2:
+            idx = torch.tensor([names.index(n) for n in batch[2]], device=dev)
+            src_sums.index_add_(0, idx, torch.stack(
+                [tok_nll.sum(1).double(), torch.full((y.size(0),), float(y.size(1)), dtype=torch.float64, device=dev)], 1))
+        for i in expert_counts_sum:
+            if model.blocks[i].ffn.last_counts is not None:
+                expert_counts_sum[i] += model.blocks[i].ffn.last_counts.to(dev)
 
+    _all_reduce(sums)
+    _all_reduce(src_sums)
+    for c in expert_counts_sum.values():
+        _all_reduce(c)
+    total_nll, total_correct, total_tokens = sums.tolist()
     nll = total_nll / total_tokens
     ppl = math.exp(min(nll, 50))  # guard exp overflow on early / broken runs
     bits_per_token = nll / math.log(2)
-    bits_per_byte = (nll * total_tokens) / (math.log(2) * bytes_per_token * total_tokens) if bytes_per_token else None
-    top1 = total_correct / total_tokens
+    bits_per_byte = bits_per_token / bytes_per_token if bytes_per_token else None
 
     result = EvalResult(
         nll=nll,
         perplexity=ppl,
         bits_per_token=bits_per_token,
         bits_per_byte=bits_per_byte,
-        top1_acc=top1,
+        top1_acc=total_correct / total_tokens,
     )
+    if position_buckets and pos_sums is not None:
+        _all_reduce(pos_sums)
+        _all_reduce(pos_count)
+        per_pos = (pos_sums / pos_count).cpu()
+        result.nll_by_position = [float(c.mean()) for c in per_pos.chunk(position_buckets)]
+    for j, name in enumerate(names):
+        s_nll, s_tok = src_sums[j].tolist()
+        if s_tok:
+            result.per_source[name] = {"nll": s_nll / s_tok, "tokens": s_tok,
+                                       "bits_per_byte": (s_nll / s_tok / math.log(2) / bytes_per_token)
+                                       if bytes_per_token else None}
 
     for i, counts in expert_counts_sum.items():
         result.expert_entropy[i], result.expert_imbalance[i] = expert_stats(counts)
@@ -96,9 +139,17 @@ def evaluate(
         if block.is_moe and hasattr(block.ffn.gate, "expert_bias"):
             result.router_bias[i] = block.ffn.gate.expert_bias.detach().cpu().tolist()
         if hasattr(block.attn, "current_lambda"):
-            result.lambda_values[i] = block.attn.current_lambda().detach().cpu().tolist()
+            result.lambda_values[i] = lambda_of(block.attn)
 
     return result
+
+
+def lambda_of(attn) -> List[float]:
+    """Per-head lambda, gathering FSDP shards first (collective under FSDP)."""
+    q1, k1, q2, k2 = (full_tensor(p.detach()).float()
+                      for p in (attn.lambda_q1, attn.lambda_k1, attn.lambda_q2, attn.lambda_k2))
+    lam = torch.exp((q1 * k1).sum(-1)) - torch.exp((q2 * k2).sum(-1)) + attn.lambda_init
+    return lam.cpu().tolist()
 
 
 def bytes_per_token_estimate(data_dir: str, bin_path: str, n_sample: int = 2000):

@@ -68,6 +68,14 @@ class TokenizerAdapter:
             return self._b.encode(text, add_special_tokens=False)
         return self._b.encode(text, allowed_special="all")
 
+    def encode_batch(self, texts: Sequence[str]) -> List[List[int]]:
+        """Multi-threaded in the Rust backends; same ids as encode() per text."""
+        if self.kind == "custom":
+            return [e.ids for e in self._b.encode_batch(list(texts))]
+        if self.kind == "hf":
+            return self._b(list(texts), add_special_tokens=False)["input_ids"]
+        return self._b.encode_batch(list(texts), allowed_special="all")
+
     def decode(self, ids: Sequence[int]) -> str:
         return self._b.decode(list(ids))
 

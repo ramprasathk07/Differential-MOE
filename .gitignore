@@ -12,6 +12,11 @@ WORKFLOW_PLANNER.md
 /data_b/
 /data_s/
 /data_fineweb_edu/
+/data_l/
+mlruns/
+mlartifacts/
+mlflow.db
+eval_results/
 checkpoints/
 model_checkpoints/
 wandb/

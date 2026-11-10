@@ -24,6 +24,11 @@ Usage:
 
     # train and save the chosen vocab size (tier A: strict-small, tier B: strict)
     python -m src.data.train_tokenizer --vocab_size 4096 --out data/tokenizer.json --track strict-small
+
+    # L tier: fit to the corpus named in a config's `data` section (SlimPajama),
+    # with an equal byte budget per source so web text cannot crowd out code/math
+    python -m src.data.train_tokenizer --hf_config configs/l_base.yaml --sweep         --candidates 16384 32768 49152 --pretrained hf:HuggingFaceTB/SmolLM2-135M
+    python -m src.data.train_tokenizer --hf_config configs/l_base.yaml --vocab_size 32768         --out tokenizers/slimpajama_bpe32k.json
 """
 
 import argparse
@@ -45,10 +50,41 @@ def dev_texts(max_lines: int):
         yield "\n".join(lines)
 
 
-def train_bpe(vocab_size: int, track: str, max_lines: int) -> ByteLevelBPETokenizer:
+def hf_texts(config_path: str, bytes_per_source: int, eval_bytes_per_source: int):
+    """Equal-size per-source samples of the config's corpus: train texts from the
+    train hash split, held-out texts from the val split (never trained on)."""
+    from datasets import load_dataset
+
+    from src.model.config import load_yaml
+    from .prepare_hf import _source, document_split
+
+    d = load_yaml(config_path)["data"]
+    sources = list(d.get("sources") or [d["dataset"]])
+    want = {"train": bytes_per_source, "val": eval_bytes_per_source}
+    texts = {split: {s: [] for s in sources} for split in want}
+    used = {split: dict.fromkeys(sources, 0) for split in want}
+    rows = load_dataset(d["dataset"], name=d["subset"], revision=d["revision"],
+                        split=d["split"], streaming=True).shuffle(seed=d["seed"], buffer_size=d["shuffle_buffer"])
+    for row in rows:
+        text = row[d["text_column"]]
+        src = _source(row, d["source_column"]) if d.get("source_column") else sources[0]
+        if src not in used["train"] or not isinstance(text, str) or not text.strip():
+            continue
+        split = document_split(text, d["seed"], d["val_fraction"], d["test_fraction"])
+        if split == "test" or used[split][src] >= want[split]:
+            continue
+        texts[split][src].append(text)
+        used[split][src] += len(text.encode("utf-8"))
+        if all(used[s][x] >= want[s] for s in want for x in sources):
+            break
+    print("sampled bytes:", used)
+    return texts["train"], texts["val"]
+
+
+def train_bpe(vocab_size: int, track: str, max_lines: int, texts=None) -> ByteLevelBPETokenizer:
     tok = ByteLevelBPETokenizer()
     tok.train_from_iterator(
-        train_texts(track, max_lines),
+        texts if texts is not None else train_texts(track, max_lines),
         vocab_size=vocab_size,
         min_frequency=2,
         special_tokens=[EOT],
@@ -74,20 +110,21 @@ def score_tokenizer(tok: TokenizerAdapter, eval_texts: list) -> dict:
     }
 
 
-def sweep(candidates: list, pretrained: list, track: str, max_lines: int, eval_max_lines: int):
-    eval_set = list(dev_texts(eval_max_lines))
-    print(f"{'tokenizer':>26}{'vocab':>9}{'fertility':>12}{'bytes/token':>14}{'storage':>9}")
-    for vs in candidates:
-        tok = TokenizerAdapter(train_bpe(vs, track, max_lines), "custom", f"custom-{vs}")
-        s = score_tokenizer(tok, eval_set)
-        dt = token_dtype(s["vocab_size"]).__name__
-        print(f"{'custom BPE':>26}{s['vocab_size']:>9}{s['fertility']:>12.3f}"
-              f"{s['bytes_per_token']:>14.3f}{dt:>9}")
-    for spec in pretrained or []:
-        s = score_tokenizer(load_tokenizer(spec), eval_set)
-        dt = token_dtype(s["vocab_size"]).__name__
-        print(f"{spec:>26}{s['vocab_size']:>9}{s['fertility']:>12.3f}"
-              f"{s['bytes_per_token']:>14.3f}{dt:>9}")
+def sweep(candidates: list, pretrained: list, track: str, max_lines: int, eval_max_lines: int,
+          train_set=None, eval_sets=None):
+    """eval_sets: {name: [texts]} scored separately (per source); None = BabyLM dev."""
+    eval_sets = eval_sets or {"babylm-dev": list(dev_texts(eval_max_lines))}
+    tokenizers = [(f"custom BPE {vs}", TokenizerAdapter(
+        train_bpe(vs, track, max_lines, None if train_set is None else iter(train_set)), "custom", f"custom-{vs}"))
+        for vs in candidates]
+    tokenizers += [(spec, load_tokenizer(spec)) for spec in pretrained or []]
+    print(f"{'tokenizer':>30}{'eval set':>24}{'vocab':>9}{'fertility':>12}{'bytes/token':>14}{'storage':>9}")
+    for name, tok in tokenizers:
+        for set_name, texts in eval_sets.items():
+            s = score_tokenizer(tok, texts)
+            dt = token_dtype(s["vocab_size"]).__name__
+            print(f"{name:>30}{set_name:>24}{s['vocab_size']:>9}{s['fertility']:>12.3f}"
+                  f"{s['bytes_per_token']:>14.3f}{dt:>9}")
     print(
         "\nCustom vocabs: pick where fertility stops dropping much per doubling (the knee).\n"
         "Pretrained: lower fertility is real, but weigh it against embedding cost --\n"
@@ -110,17 +147,29 @@ def main():
                      help="cap lines read per domain for training; 0 = all (full track)")
     ap.add_argument("--eval_max_lines_per_domain", type=int, default=2000,
                      help="cap lines per domain from the dev set used for sweep scoring")
+    ap.add_argument("--hf_config", default=None,
+                     help="train on the corpus in this YAML's `data` section instead of BabyLM")
+    ap.add_argument("--mb_per_source", type=int, default=200, help="--hf_config training sample per source")
+    ap.add_argument("--eval_mb_per_source", type=int, default=4, help="--hf_config held-out sample per source")
     args = ap.parse_args()
+
+    train_set = eval_sets = None
+    if args.hf_config:
+        by_source, held_out = hf_texts(args.hf_config, args.mb_per_source * 2**20, args.eval_mb_per_source * 2**20)
+        train_set = [t for texts in by_source.values() for t in texts]
+        eval_sets = held_out
 
     if args.sweep:
         sweep(args.candidates, args.pretrained, args.track,
-              args.max_lines_per_domain, args.eval_max_lines_per_domain)
+              args.max_lines_per_domain, args.eval_max_lines_per_domain, train_set, eval_sets)
         return
 
-    tok = train_bpe(args.vocab_size, args.track, args.max_lines_per_domain)
+    tok = train_bpe(args.vocab_size, args.track, args.max_lines_per_domain,
+                    None if train_set is None else iter(train_set))
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     tok.save(args.out)
-    print(f"saved tokenizer: vocab={tok.get_vocab_size()} track={args.track} -> {args.out}")
+    source = args.hf_config or f"babylm {args.track}"
+    print(f"saved tokenizer: vocab={tok.get_vocab_size()} source={source} -> {args.out}")
 
 
 if __name__ == "__main__":

@@ -1,3 +1,3 @@
-from .dataset import eval_batches, get_batch, load_tokens
+from .dataset import SourceSampler, eval_batches, eval_windows, get_batch, load_tokens, window_batches
 
-__all__ = ["eval_batches", "get_batch", "load_tokens"]
+__all__ = ["SourceSampler", "eval_batches", "eval_windows", "get_batch", "load_tokens", "window_batches"]
