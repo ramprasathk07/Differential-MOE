@@ -56,7 +56,7 @@ def hf_texts(config_path: str, bytes_per_source: int, eval_bytes_per_source: int
     from datasets import load_dataset
 
     from src.model.config import load_yaml
-    from .prepare_hf import _source, document_split
+    from .prepare_hf import _source, check_sources, document_split
 
     d = load_yaml(config_path)["data"]
     sources = list(d.get("sources") or [d["dataset"]])
@@ -65,10 +65,15 @@ def hf_texts(config_path: str, bytes_per_source: int, eval_bytes_per_source: int
     used = {split: dict.fromkeys(sources, 0) for split in want}
     rows = load_dataset(d["dataset"], name=d["subset"], revision=d["revision"],
                         split=d["split"], streaming=True).shuffle(seed=d["seed"], buffer_size=d["shuffle_buffer"])
+    unmatched = {}
     for row in rows:
         text = row[d["text_column"]]
         src = _source(row, d["source_column"]) if d.get("source_column") else sources[0]
-        if src not in used["train"] or not isinstance(text, str) or not text.strip():
+        if src not in used["train"]:
+            unmatched[src] = unmatched.get(src, 0) + 1
+            check_sources(unmatched, used["train"], sources)
+            continue
+        if not isinstance(text, str) or not text.strip():
             continue
         split = document_split(text, d["seed"], d["val_fraction"], d["test_fraction"])
         if split == "test" or used[split][src] >= want[split]:
@@ -134,6 +139,9 @@ def sweep(candidates: list, pretrained: list, track: str, max_lines: int, eval_m
 
 
 def main():
+    from src.tracking import load_training_env
+
+    load_training_env()  # HF_TOKEN from .env: authenticated Hub requests get higher rate limits
     ap = argparse.ArgumentParser()
     ap.add_argument("--sweep", action="store_true", help="score candidates and exit, no file written")
     ap.add_argument("--candidates", type=int, nargs="+", default=[2048, 4096, 8192, 16384])

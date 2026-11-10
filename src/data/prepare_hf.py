@@ -49,6 +49,14 @@ def _source(row, column):
     return value
 
 
+def check_sources(unmatched, matched, sources, limit=10_000):
+    """A misspelled `sources` list would otherwise skip every row of a 590M-doc stream."""
+    if not any(matched.values()) and sum(unmatched.values()) >= limit:
+        seen = sorted(unmatched, key=unmatched.get, reverse=True)[:10]
+        raise ValueError(f"No row matched data.sources {sources} in {limit} rows; "
+                         f"the source column holds e.g. {seen}")
+
+
 def _batches(rows, size):
     batch = []
     for row in rows:
@@ -93,6 +101,7 @@ def prepare_rows(rows, tok, out_dir, settings, *, model_vocab, seq_len):
     doc_starts, doc_source = array("q"), array("B")
     source_id = {src: i for i, src in enumerate(sources)}
     max_id = tok.eot_id
+    unmatched = {}  # source names seen but not configured, for the fail-fast check
     total_budget = sum(budgets.values())
     log_every = max(1_000_000, total_budget // 200)
     next_log = log_every
@@ -110,6 +119,8 @@ def prepare_rows(rows, tok, out_dir, settings, *, model_vocab, seq_len):
                         continue
                     src = _source(row, column) if column else sources[0]
                     if src not in source_id:
+                        unmatched[src] = unmatched.get(src, 0) + 1
+                        check_sources(unmatched, documents, sources)
                         continue
                     text = text.strip()
                     split = document_split(text, settings["seed"], val_fraction, test_fraction)
@@ -186,6 +197,9 @@ def prepare_rows(rows, tok, out_dir, settings, *, model_vocab, seq_len):
 
 
 def main():
+    from src.tracking import load_training_env
+
+    load_training_env()  # HF_TOKEN from .env: authenticated Hub requests get higher rate limits
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--config", required=True)
     ap.add_argument("--out_dir", help="override the YAML data_dir")

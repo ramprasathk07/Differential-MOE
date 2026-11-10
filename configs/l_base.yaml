@@ -8,9 +8,11 @@ data_dir: data_l
 
 # Consumed by `python -m src.data.prepare_hf --config configs/l_base.yaml`.
 data:
-  dataset: cerebras/SlimPajama-627B
+  # cerebras/SlimPajama-627B returns 404 on the Hub (since Jul 2026); this is the
+  # same corpus re-uploaded as parquet: 590,394,625 train docs, same text/meta schema.
+  dataset: gmongaras/SlimPajama-627B_Reupload
   subset: null
-  revision: main          # pin to a commit sha once prepared, for exact reproduction
+  revision: c34c22dbb10ae6b264a2f357a909d1a537141b36
   split: train
   text_column: text
   source_column: meta.redpajama_set_name

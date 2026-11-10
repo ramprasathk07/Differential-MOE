@@ -35,6 +35,10 @@ git add tokenizers/slimpajama_bpe32k.json        # the eval PC needs the same fi
 python -m src.data.prepare_hf --config configs/l_base.yaml
 ```
 
+Set `HF_TOKEN` in `.env` (a read token) before streaming. The corpus is
+`gmongaras/SlimPajama-627B_Reupload` at a pinned commit, because the original
+`cerebras/SlimPajama-627B` returns 404 on the Hub.
+
 If `<|endoftext|>` is not id 0, `prepare_hf` stops with an error; set
 `model.eos_id` to match. The trainer re-checks it against `data_l/meta.json`.
 

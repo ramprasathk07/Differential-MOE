@@ -126,3 +126,16 @@ def test_mlflow_tracker_resumes_and_indexes_checkpoints(tmp_path, monkeypatch):
     assert calls.runs[-1] == "run-1"
     again.log_params({"model": {"dim": 1536, "new_key": 1}})  # immutable params: only new keys
     assert calls.params["model.new_key"] == "1"
+
+
+def test_unmatched_source_names_fail_fast(tmp_path):
+    vocab = {"<|endoftext|>": 0, "[UNK]": 1, "w": 2}
+    backend = Tokenizer(models.WordLevel(vocab, unk_token="[UNK]"))
+    backend.pre_tokenizer = pre_tokenizers.Whitespace()
+    tok = TokenizerAdapter(backend, "custom", "fixture")
+    rows = ({"text": "w w", "meta": {"set": "RedPajamaC4"}} for _ in range(20_000))
+    settings = dict(dataset="fixture", text_column="text", seed=7, train_tokens=50, val_tokens=20,
+                    test_tokens=20, val_fraction=0.1, test_fraction=0.1,
+                    source_column="meta.set", sources=["RedPajamaCommonCrawl"])
+    with pytest.raises(ValueError, match="RedPajamaC4"):
+        prepare_rows(rows, tok, tmp_path / "out", settings, model_vocab=8, seq_len=4)
