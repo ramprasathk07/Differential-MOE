@@ -55,6 +55,7 @@ class ModelConfig:
     mhc_sinkhorn_iters: int = 20
     xsa: bool = False  # Exclusive Self Attention
     doc_mask: bool = False  # block attention across eos_id document boundaries
+    flex_attention: bool = True  # False: doc mask via dense SDPA mask instead of FlexAttention
     eos_id: int = -1
 
     def __post_init__(self):

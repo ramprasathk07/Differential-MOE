@@ -31,7 +31,8 @@ class Transformer(nn.Module):
         self.norm = make_norm(cfg, cfg.dim)
         self.final_res = AttnRes(cfg.dim, cfg.norm_eps) if cfg.residual == "attnres" else None
         self.gradient_checkpointing = False  # set by the trainer
-        self.use_flex = None  # None: FlexAttention on CUDA when Triton exists, else dense SDPA mask
+        # None: FlexAttention on CUDA when Triton exists, else dense SDPA mask
+        self.use_flex = None if cfg.flex_attention else False
         self.head = nn.Linear(cfg.dim, cfg.vocab_size, bias=False)
         if cfg.tie_embeddings:
             self.head.weight = self.embed.weight
