@@ -99,6 +99,12 @@ class Transformer(nn.Module):
 
     def compile_blocks(self):
         """torch.compile the per-layer compute; the MoE dispatch loop stays eager."""
+        import torch._dynamo
+        # All compiled modules share nn.Module._call_impl's cache. With the LRU order, the
+        # checkpoint recompute of a dense FFN can hit the experts' newer dynamic graph instead
+        # of the static one its forward used -> CheckpointError (pytorch#166926, torchtitan#1991).
+        torch._C._dynamo.eval_frame._set_lru_cache(False)
+        torch._dynamo.config.recompile_limit = max(torch._dynamo.config.recompile_limit, 64)
         for block in self.blocks:
             block.attn.compile()
             block.attn_norm.compile()
