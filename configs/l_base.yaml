@@ -84,5 +84,5 @@ train:
     RedPajamaArXiv: 2.0
     RedPajamaGithub: 2.0
     RedPajamaWikipedia: 2.0
-  peak_tflops: 364.0      # RTX 6000 Ada dense BF16, for MFU; set to your card's spec
+  peak_tflops: 154.8      # RTX A6000 (Ampere) dense BF16, for MFU only; set to your card's spec
   seed: 42
