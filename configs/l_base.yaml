@@ -66,7 +66,10 @@ train:
   beta2: 0.95
   amp: true
   precision: bf16         # bf16 params/compute, fp32 grad reduce + AdamW state
-  compile: true           # if a torch/driver combo misbehaves: --override train.compile=false
+  # Module compile off: Inductor treats FSDP2-gathered params as aligned static inputs and
+  # crashed (CUDA misaligned address) on the diff-attn lambda kernel. FlexAttention is still
+  # compiled on its own (activations only). Retry with --override train.compile=true.
+  compile: false
   activation_checkpointing: true
   log_freq: 10
   eval_freq: 500
