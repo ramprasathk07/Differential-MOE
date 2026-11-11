@@ -41,6 +41,7 @@ import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel
+from tqdm import tqdm
 
 from src.data import SourceSampler, eval_windows, get_batch, load_tokens, window_batches
 from src.eval import bytes_per_token_estimate, evaluate, expert_stats, full_tensor, lambda_of
@@ -565,6 +566,11 @@ def main():
     src_n = torch.zeros(len(source_names), dtype=torch.float64, device=device)
     last_avg_loss = None
     epoch_tokens = max(1, len(train_data))
+    # Counts optimizer steps but advances per micro-batch, so it moves even when one
+    # step is minutes long. Log lines go through tqdm.write to print above it.
+    pbar = tqdm(total=cfg.train.max_steps, initial=start_step, desc=cfg.run_name, unit="step",
+                dynamic_ncols=True, mininterval=2, disable=not is_main,
+                bar_format="{l_bar}{bar}| {n:.1f}/{total_fmt} [{elapsed}<{remaining}{postfix}]")
 
     for step in range(start_step, cfg.train.max_steps):
         step_start = time.perf_counter()
@@ -597,6 +603,7 @@ def main():
                 idx = torch.as_tensor(src, device=device)
                 src_loss.index_add_(0, idx, tok_ce.detach().view(len(src), -1).mean(1).double())
                 src_n.index_add_(0, idx, torch.ones(len(src), dtype=torch.float64, device=device))
+            pbar.update(1 / accum_steps)
 
         scaler.unscale_(optimizer)
         grad_norm = full_tensor(torch.nn.utils.clip_grad_norm_(raw_model.parameters(), cfg.train.grad_clip))
@@ -613,6 +620,7 @@ def main():
         running_time += time.perf_counter() - step_start
         tokens_trained = tokens_per_step * (step + 1)
         epoch = tokens_trained / epoch_tokens
+        pbar.n = step + 1  # drop float drift from the fractional updates
 
         if (step + 1) % cfg.train.log_freq == 0 or (step + 1) == cfg.train.max_steps:
             avg_loss, avg_aux, avg_z = reduce_mean((running / running_count).tolist())
@@ -631,7 +639,8 @@ def main():
                 if diag["expert_entropy"]:
                     mean_ent = sum(diag["expert_entropy"].values()) / len(diag["expert_entropy"])
                     diag_summary += f" expert_entropy_avg {mean_ent:.3f}"
-                print(
+                pbar.set_postfix(loss=f"{avg_loss:.3f}", tok_s=f"{tok_per_sec:.0f}", lr=f"{lr:.1e}", refresh=False)
+                tqdm.write(
                     f"step {step+1}/{cfg.train.max_steps} tokens {tokens_trained/1e6:.1f}M epoch {epoch:.3f} "
                     f"loss {avg_loss:.4f} ppl {ppl:.2f} aux {avg_aux:.4f} z {avg_z:.4f} "
                     f"lr {lr:.2e} grad_norm {grad_norm:.2f} tok/s {tok_per_sec:.0f}{diag_summary}"
@@ -673,7 +682,9 @@ def main():
         is_snapshot = bool(cfg.train.snapshot_freq) and (step + 1) % cfg.train.snapshot_freq == 0
         result = None
         if is_eval:
-            batches = window_batches(val_data, my_val_windows, cfg.train.batch_size, cfg.model.seq_len, device)
+            batches = tqdm(window_batches(val_data, my_val_windows, cfg.train.batch_size, cfg.model.seq_len, device),
+                           total=math.ceil(len(my_val_windows) / cfg.train.batch_size), desc="val",
+                           unit="batch", leave=False, dynamic_ncols=True, disable=not is_main)
             result = evaluate(raw_model, batches, bytes_per_token, source_names=val_names,
                               position_buckets=POSITION_BUCKETS if cfg.model.seq_len % POSITION_BUCKETS == 0 else 0)
             model.train()
@@ -683,7 +694,7 @@ def main():
                 info = {"step": step + 1, "tokens": tokens_trained, "epoch": epoch}
                 if result is not None:
                     info["val_nll"] = result.nll
-                    print(
+                    tqdm.write(
                         f"[eval] step {step+1} nll {result.nll:.4f} ppl {result.perplexity:.2f} "
                         f"bpb {result.bits_per_byte} top1 {result.top1_acc:.4f} "
                         f"entropy {result.expert_entropy}"
@@ -743,6 +754,7 @@ def main():
             if mlf:
                 mlf.log_metrics({k: v for k, v in wandb_metrics.items() if "_L" not in k}, step + 1)
 
+    pbar.close()
     if is_main:
         wall_clock_s = time.time() - train_start
         total_tokens = tokens_per_step * cfg.train.max_steps
