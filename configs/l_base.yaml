@@ -70,8 +70,8 @@ train:
   beta2: 0.95
   amp: true
   precision: bf16         # bf16 params/compute, fp32 grad reduce + AdamW state
-  # Off: gpu_selftest's flex+compile+FSDP case still fails on a healthy GPU (under investigation).
-  compile: false
+  # A6000, l_diffmoe, FSDP, batch 2: 4,366 tok/s eager -> 5,302 compiled. First steps compile (~minutes).
+  compile: true
   activation_checkpointing: true
   log_freq: 10
   eval_freq: 500

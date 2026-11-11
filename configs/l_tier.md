@@ -62,7 +62,7 @@ python -m src.train --config configs/l_diffmoe.yaml --gpus 0
   python -m src.train --config configs/l_diffmoe.yaml --gpus 0,1,2,3 \
       --override run_name=l_diffmoe_no_xsa --override model.xsa=false
   # other switches: model.residual=standard | mhc   model.norm=rmsnorm | dyt
-  #                 model.doc_mask=false   train.compile=false
+  #                 model.doc_mask=false   train.compile=false (eager, ~20% slower)
   ```
 
 **Memory.** On a single GPU the MoE cells need 30.2 GiB of fp32 weights, grads
