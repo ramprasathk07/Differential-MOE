@@ -97,6 +97,27 @@ def test_attnres_starts_as_uniform_average():
     assert torch.allclose(AttnRes(8)(sources), torch.stack(sources).mean(0), atol=1e-6)
 
 
+def test_attnres_matches_stacked_reference():
+    """The stack-free forward equals softmax_n(q . RMSNorm(s_n)) . s_n, values and grads,
+    with mixed fp32/bf16 sources like the autocast path (fp32 embedding, bf16 block sums)."""
+    torch.manual_seed(0)
+    res = AttnRes(16)
+    with torch.no_grad():
+        res.query.normal_()
+    sources = [torch.randn(2, 5, 16, requires_grad=True)] + [
+        (3 * torch.randn(2, 5, 16)).bfloat16().requires_grad_() for _ in range(3)]
+    values = torch.stack([s.float() for s in sources])
+    keys = values * torch.rsqrt(values.pow(2).mean(-1, keepdim=True) + res.eps)
+    ref = torch.einsum("nbs,nbsd->bsd", torch.einsum("d,nbsd->nbs", res.query, keys).softmax(0), values)
+    out = res(sources)
+    assert out.dtype == torch.float32
+    assert torch.allclose(out, ref, atol=0.05, rtol=0.02)  # bf16 gemv logits
+    g_out = torch.autograd.grad(out.sum(), [res.query, *sources])
+    g_ref = torch.autograd.grad(ref.sum(), [res.query, *sources])
+    for a, b in zip(g_out, g_ref):
+        assert torch.allclose(a.float(), b.float(), atol=0.1, rtol=0.05)
+
+
 def test_sinkhorn_is_doubly_stochastic():
     m = sinkhorn(torch.randn(10, 4, 4), 20)  # 20 iterations: approximate for very skewed logits
     assert (m >= 0).all()

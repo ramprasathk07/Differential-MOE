@@ -14,6 +14,7 @@ onto the doubly stochastic matrices by Sinkhorn-Knopp:
 Initialised so all streams stay equal and the update reduces to x + f(x).
 """
 
+import functools
 import math
 from typing import List, Tuple
 
@@ -31,13 +32,21 @@ class AttnRes(nn.Module):
         self.last_weights = None  # (n_sources,) mean depth weights, for logging
 
     def forward(self, sources: List[torch.Tensor]) -> torch.Tensor:
-        values = torch.stack(sources)  # (N, B, S, D)
-        v32 = values.float()
         # Parameter-free key norm: a learned key scale would be redundant with the query.
-        keys = v32 * torch.rsqrt(v32.pow(2).mean(-1, keepdim=True) + self.eps)
-        weights = torch.einsum("d,nbsd->nbs", self.query.float(), keys).softmax(0)
+        # q . (s / rms(s)) == (q . s) / rms(s): one gemv and one fp32-accumulated norm per
+        # source, so no stacked or fp32 copy of the sources is made or saved for backward.
+        dtype = functools.reduce(torch.promote_types, (s.dtype for s in sources))
+        logits = torch.stack([
+            (s @ self.query.to(s.dtype)).float() * torch.rsqrt(
+                torch.linalg.vector_norm(s, dim=-1, dtype=torch.float32).square() / s.size(-1) + self.eps)
+            for s in sources])
+        weights = logits.softmax(0)  # (N, B, S)
         self.last_weights = weights.detach().mean(dim=(1, 2))
-        return torch.einsum("nbs,nbsd->bsd", weights.type_as(values), values)
+        w = weights.to(dtype).unsqueeze(-1)
+        out = sources[0].to(dtype) * w[0]
+        for s, wi in zip(sources[1:], w[1:]):
+            out = torch.addcmul(out, s, wi)
+        return out
 
 
 def sinkhorn(logits: torch.Tensor, iters: int) -> torch.Tensor:

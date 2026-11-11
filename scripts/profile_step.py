@@ -18,6 +18,7 @@ sys.path.insert(0, ROOT)
 
 import torch  # noqa: E402
 import torch.nn.functional as F  # noqa: E402
+from torch.autograd import DeviceType  # noqa: E402
 
 from src.model import Config, Transformer  # noqa: E402
 
@@ -29,6 +30,7 @@ def main():
     ap.add_argument("--batch", type=int, default=1)
     ap.add_argument("--iters", type=int, default=3)
     ap.add_argument("--fsdp", action="store_true", help="wrap like the trainer (FSDP2, world size 1)")
+    ap.add_argument("--compile", action="store_true", help="model.compile_blocks(), like train.compile=true")
     ap.add_argument("--device", default="cuda")
     args = ap.parse_args()
 
@@ -38,6 +40,8 @@ def main():
     with torch.device(dev):
         model = Transformer(cfg)
     model.gradient_checkpointing = True
+    if args.compile:
+        model.compile_blocks()  # same order as src/train.py: compile, then shard
     if args.fsdp:
         import torch.distributed as dist
         from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
@@ -59,7 +63,7 @@ def main():
         loss.backward()
 
     sync = torch.cuda.synchronize if dev == "cuda" else (lambda: None)
-    for _ in range(2):  # warm-up: kernel compilation, allocator growth
+    for _ in range(4 if args.compile else 2):  # warm-up: kernel compilation, allocator growth
         micro()
     sync()
     t0 = time.perf_counter()
@@ -69,10 +73,6 @@ def main():
     dt = (time.perf_counter() - t0) / args.iters
     tok_s = args.batch * cfg.seq_len / dt
     peak = torch.cuda.max_memory_allocated() / 2**30 if dev == "cuda" else 0.0
-    print(f"\n{cfg.attention}/{cfg.ffn} norm={cfg.norm} residual={cfg.residual} xsa={cfg.xsa} "
-          f"flex={cfg.flex_attention} fsdp={args.fsdp} batch={args.batch}x{cfg.seq_len}")
-    print(f"{tok_s:,.0f} tok/s  ({dt:.2f} s per micro-batch)  peak {peak:.1f} GB  "
-          f"-> 10B tokens in {10e9 / tok_s / 86400:.1f} days on this GPU (optimizer step not included)")
 
     acts = [torch.profiler.ProfilerActivity.CPU] + ([torch.profiler.ProfilerActivity.CUDA] if dev == "cuda" else [])
     with torch.profiler.profile(activities=acts) as prof:
@@ -81,11 +81,17 @@ def main():
         sync()
         wall = time.perf_counter() - t0
     events = prof.key_averages()
-    if dev == "cuda":
-        busy = sum(getattr(e, "self_device_time_total", 0) or 0 for e in events) / 1e6
-        print(f"GPU busy {100 * busy / wall:.0f}% of the micro-batch wall time ({busy:.2f} of {wall:.2f} s)")
     sort = "self_device_time_total" if dev == "cuda" else "self_cpu_time_total"
     print(events.table(sort_by=sort, row_limit=25, max_name_column_width=60))
+    # Summary last, so `| tail -3` keeps it.
+    print(f"\n{cfg.attention}/{cfg.ffn} norm={cfg.norm} residual={cfg.residual} xsa={cfg.xsa} "
+          f"flex={cfg.flex_attention} fsdp={args.fsdp} compile={args.compile} batch={args.batch}x{cfg.seq_len}")
+    print(f"{tok_s:,.0f} tok/s  ({dt:.2f} s per micro-batch)  peak {peak:.1f} GB  "
+          f"-> 10B tokens in {10e9 / tok_s / 86400:.1f} days on this GPU (optimizer step not included)")
+    if dev == "cuda":
+        # Kernel rows only: op rows repeat their kernels' time and would double-count.
+        busy = sum(e.self_device_time_total for e in events if e.device_type == DeviceType.CUDA) / 1e6
+        print(f"GPU busy {100 * busy / wall:.0f}% of the micro-batch wall time ({busy:.2f} of {wall:.2f} s)")
 
 
 if __name__ == "__main__":

@@ -38,7 +38,8 @@ CASES = {
     "l_diffmoe": {},           # configs/l_diffmoe.yaml as is
     "l_diffmoe+ckpt": {},
     "l_diffmoe+ckpt+fsdp": {},
-    # the trainer's fast path: FlexAttention + per-module torch.compile under FSDP
+    # torch.compile on one GPU (no FSDP), then the multi-GPU fast path under FSDP
+    "l_diffmoe+flex+compile+ckpt": dict(flex_attention=True),
     "l_diffmoe+flex+compile+ckpt+fsdp": dict(flex_attention=True),
 }
 
