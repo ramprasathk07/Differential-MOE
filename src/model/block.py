@@ -1,10 +1,13 @@
 """Pre-norm transformer block with a selectable residual stream.
 
-The residual state passed between blocks depends on cfg.residual:
+The residual state passed into a block depends on cfg.residual:
   standard  x                    (B, S, D)
   attnres   (sources, partial)   Block AttnRes: completed block reps + running block sum
   mhc       streams              (B, S, n, D)
-Everything goes through Block.forward so FSDP's per-block hooks always fire.
+Everything goes through Block.forward so FSDP's per-block hooks always fire. A block
+returns only tensors it computed: under AttnRes it returns the new partial sum and the
+Transformer owns the sources list. Re-returning earlier blocks' tensors would hang every
+block's FSDP backward hooks on them and free gathered weights while still in use.
 """
 
 from typing import Tuple
@@ -57,10 +60,7 @@ class Block(nn.Module):
             out = self._attn(h, rope, mask)
             partial = out if partial is None else partial + out
             y, aux, z = self._ffn(self.ffn_res(sources + [partial]))
-            partial = partial + y
-            if self.ends_block:
-                sources, partial = sources + [partial], None
-            return (sources, partial), aux, z
+            return partial + y, aux, z
         if self.residual == "mhc":
             h, (post, res) = self.attn_mhc(state)
             state = MHC.write(state, self._attn(h, rope, mask), post, res)

@@ -76,9 +76,14 @@ class Transformer(nn.Module):
         recompute = self.gradient_checkpointing and self.training and torch.is_grad_enabled()
         for block in self.blocks:
             if recompute:
-                state, aux, z = checkpoint(block, state, self.rope, mask, use_reentrant=False)
+                out, aux, z = checkpoint(block, state, self.rope, mask, use_reentrant=False)
             else:
-                state, aux, z = block(state, self.rope, mask)
+                out, aux, z = block(state, self.rope, mask)
+            if cfg.residual == "attnres":  # out is the block's new partial sum
+                sources = state[0]
+                state = (sources + [out], None) if block.ends_block else (sources, out)
+            else:
+                state = out
             aux_total = aux_total + aux
             z_total = z_total + z
         if cfg.residual == "attnres":
