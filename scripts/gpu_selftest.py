@@ -12,6 +12,7 @@ Triton or driver change, and before a multi-day run:
 import argparse
 import dataclasses
 import os
+import re
 import subprocess
 import sys
 import time
@@ -79,10 +80,10 @@ def run_case(name, device, seq_len):
 
 def summarize(stderr):
     """The error line plus the deepest frame inside this repo."""
-    lines = [l.strip() for l in stderr.splitlines()]
-    err = next((l for l in reversed(lines) if "Error" in l and not l.startswith("File")), "no error line")
-    ours = [l for l in lines if l.startswith("File") and os.sep + "src" + os.sep in l.replace("/", os.sep)]
-    return err[:140], (ours[-1].split(", in ")[0].split(os.sep + "src" + os.sep)[-1] if ours else "")
+    lines = [l.strip().replace("\\", "/") for l in stderr.splitlines()]
+    err = next((l for l in reversed(lines) if re.match(r"^[\w.]*(Error|Exception)\b[^:]*:", l)), "no error line")
+    ours = [l for l in lines if l.startswith("File") and "/src/" in l]
+    return err[:140], (ours[-1].split(", in ")[0].split("/src/")[-1] if ours else "")
 
 
 def main():
