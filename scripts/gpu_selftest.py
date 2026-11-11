@@ -38,6 +38,8 @@ CASES = {
     "l_diffmoe": {},           # configs/l_diffmoe.yaml as is
     "l_diffmoe+ckpt": {},
     "l_diffmoe+ckpt+fsdp": {},
+    # the trainer's fast path: FlexAttention + per-module torch.compile under FSDP
+    "l_diffmoe+flex+compile+ckpt+fsdp": dict(flex_attention=True),
 }
 
 
@@ -61,6 +63,8 @@ def run_case(name, device, seq_len):
     with torch.device(device):
         model = Transformer(cfg)
     model.gradient_checkpointing = "ckpt" in name
+    if "compile" in name:
+        model.compile_blocks()  # same order as src/train.py: compile, then shard
     if fsdp:
         mp = MixedPrecisionPolicy(param_dtype=torch.bfloat16, reduce_dtype=torch.float32)
         for block in model.blocks:
