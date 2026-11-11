@@ -51,10 +51,10 @@ model:
   mhc_sinkhorn_iters: 20
   xsa: true               # Exclusive Self Attention
   doc_mask: true          # no attention across document boundaries
-  # Off until verified on GPU: the first smoke runs died with CUDA "misaligned address"
-  # right after the FlexAttention calls (diff attn: q/k dim 64, v dim 128). The dense
-  # SDPA mask is the S-tier-proven path; same masking, no tile skipping.
-  flex_attention: false
+  # FlexAttention: doc mask with fully-masked tiles skipped. Verified on a healthy RTX A6000
+  # by scripts/gpu_selftest.py; earlier crashes came from a faulty GPU (index 2 on the
+  # training box). `false` falls back to a dense SDPA mask.
+  flex_attention: true
   eos_id: 0               # <|endoftext|> is the first special token of the trained BPE
 
 train:
@@ -70,7 +70,7 @@ train:
   beta2: 0.95
   amp: true
   precision: bf16         # bf16 params/compute, fp32 grad reduce + AdamW state
-  # Off until the GPU smoke run passes (an earlier crash was first misattributed to it).
+  # Off: gpu_selftest's flex+compile+FSDP case still fails on a healthy GPU (under investigation).
   compile: false
   activation_checkpointing: true
   log_freq: 10
