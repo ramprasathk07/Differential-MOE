@@ -72,7 +72,11 @@ python -m src.train --config configs/l_diffmoe.yaml --gpus 0
 **Memory.** On a single GPU the MoE cells need 30.2 GiB of fp32 weights, grads
 and AdamW state. With activation checkpointing that leaves room for 2 × 4096
 tokens per micro-batch. Four GPUs shard that state four ways. If you have the
-headroom, `--override train.batch_size=4` halves accumulation.
+headroom, `--override train.batch_size=4` halves accumulation. Spare memory can
+also skip recompute: `--override train.ckpt_skip_last=N` keeps the last N blocks'
+activations (each saves ~1/24 of the backward recompute). Find the largest N that
+fits with `scripts/profile_step.py --fsdp --compile --override train.ckpt_skip_last=N`,
+whose peak plus the printed AdamW share (divided by the GPU count) must stay under ~44 GB.
 
 **Time (estimates until your 200-step timing).** One cell is about 5.3e19
 FLOPs for 10B tokens. At 80 to 120 TFLOPS achieved per GPU:

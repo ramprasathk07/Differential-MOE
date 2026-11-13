@@ -31,6 +31,7 @@ class Transformer(nn.Module):
         self.norm = make_norm(cfg, cfg.dim)
         self.final_res = AttnRes(cfg.dim, cfg.norm_eps) if cfg.residual == "attnres" else None
         self.gradient_checkpointing = False  # set by the trainer
+        self.ckpt_skip_last = 0  # with checkpointing: the last N blocks keep activations
         # None: FlexAttention on CUDA when Triton exists, else dense SDPA mask
         self.use_flex = None if cfg.flex_attention else False
         self.head = nn.Linear(cfg.dim, cfg.vocab_size, bias=False)
@@ -74,8 +75,9 @@ class Transformer(nn.Module):
         aux_total = torch.zeros((), device=tokens.device, dtype=torch.float32)
         z_total = torch.zeros((), device=tokens.device, dtype=torch.float32)
         recompute = self.gradient_checkpointing and self.training and torch.is_grad_enabled()
-        for block in self.blocks:
-            if recompute:
+        n_recompute = len(self.blocks) - self.ckpt_skip_last
+        for i, block in enumerate(self.blocks):
+            if recompute and i < n_recompute:
                 out, aux, z = checkpoint(block, state, self.rope, mask, use_reentrant=False)
             else:
                 out, aux, z = block(state, self.rope, mask)

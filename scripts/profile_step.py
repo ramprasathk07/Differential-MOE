@@ -34,12 +34,15 @@ def main():
     ap.add_argument("--device", default="cuda")
     args = ap.parse_args()
 
-    cfg = Config.from_yaml(os.path.join(ROOT, args.config) if not os.path.isabs(args.config) else args.config,
-                           args.override).model
+    full = Config.from_yaml(os.path.join(ROOT, args.config) if not os.path.isabs(args.config) else args.config,
+                            args.override)
+    cfg = full.model
     dev = args.device
     with torch.device(dev):
         model = Transformer(cfg)
-    model.gradient_checkpointing = True
+    n_params = sum(p.numel() for p in model.parameters())
+    model.gradient_checkpointing = full.train.activation_checkpointing
+    model.ckpt_skip_last = full.train.ckpt_skip_last
     if args.compile:
         model.compile_blocks()  # same order as src/train.py: compile, then shard
     if args.fsdp:
@@ -85,8 +88,11 @@ def main():
     print(events.table(sort_by=sort, row_limit=25, max_name_column_width=60))
     # Summary last, so `| tail -3` keeps it.
     print(f"\n{cfg.attention}/{cfg.ffn} norm={cfg.norm} residual={cfg.residual} xsa={cfg.xsa} "
-          f"flex={cfg.flex_attention} fsdp={args.fsdp} compile={args.compile} batch={args.batch}x{cfg.seq_len}")
-    print(f"{tok_s:,.0f} tok/s  ({dt:.2f} s per micro-batch)  peak {peak:.1f} GB  "
+          f"flex={cfg.flex_attention} fsdp={args.fsdp} compile={args.compile} batch={args.batch}x{cfg.seq_len} "
+          f"ckpt={model.gradient_checkpointing} ckpt_skip_last={model.ckpt_skip_last}")
+    adam_gb = 8 * n_params / 2**30  # two fp32 AdamW states per parameter, not allocated here
+    print(f"{tok_s:,.0f} tok/s  ({dt:.2f} s per micro-batch)  peak {peak:.1f} GB "
+          f"(+{adam_gb:.1f} GB AdamW in training, / GPU count)  "
           f"-> 10B tokens in {10e9 / tok_s / 86400:.1f} days on this GPU (optimizer step not included)")
     if dev == "cuda":
         # Kernel rows only: op rows repeat their kernels' time and would double-count.
