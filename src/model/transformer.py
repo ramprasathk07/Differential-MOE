@@ -105,6 +105,12 @@ class Transformer(nn.Module):
         # of the static one its forward used -> CheckpointError (pytorch#166926, torchtitan#1991).
         torch._C._dynamo.eval_frame._set_lru_cache(False)
         torch._dynamo.config.recompile_limit = max(torch._dynamo.config.recompile_limit, 64)
+        # AttnRes: norm, dot, softmax and weighted sum over 2-10 sources fuse into a few
+        # kernels; one graph per source count (guarded on the list length).
+        res_modules = [self.final_res] + [getattr(b, n, None) for b in self.blocks for n in ("attn_res", "ffn_res")]
+        for res in res_modules:
+            if res is not None:
+                res.compile()
         for block in self.blocks:
             block.attn.compile()
             block.attn_norm.compile()
