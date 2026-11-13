@@ -61,6 +61,26 @@ class SiTUGLU(nn.Module):
         return self.w2(hidden)
 
 
+def dispatch(experts: nn.ModuleList, x: torch.Tensor, idx: torch.Tensor,
+             weights: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    """out[t] = sum_k weights[t, k] * experts[idx[t, k]](x[t]); x (T, D), idx/weights (T, k).
+
+    Sorts the (token, slot) pairs by expert: one host sync (the split sizes), one gather
+    and one scatter, instead of a torch.where sync, gather and scatter per expert. An
+    empty expert still runs on zero rows, so every parameter joins the graph and DDP/FSDP
+    never see an unused parameter. Returns the output and the per-expert counts.
+    """
+    T, k = idx.shape
+    flat = idx.flatten()
+    order = flat.argsort(stable=True)
+    counts = torch.bincount(flat, minlength=len(experts))
+    xs = x[order // k]
+    ys = torch.cat([expert(rows) for expert, rows in zip(experts, xs.split(counts.tolist()))])
+    ys = ys * weights.flatten()[order].unsqueeze(-1)
+    out = torch.empty_like(ys).index_copy_(0, order, ys)  # back to (token, slot) order
+    return out.view(T, k, -1).sum(1), counts
+
+
 class RoutedMoE(nn.Module):
     """Common interface used by routing diagnostics and parameter accounting."""
 
@@ -124,18 +144,11 @@ class MoE(RoutedMoE):
         B, S, D = x.shape
         xf = x.reshape(-1, D)
         weights, idx, aux, z = self.gate(xf)
-        weights = weights.type_as(xf)
-
-        out = torch.zeros_like(xf)
-        for e in range(self.n_experts):
-            # An empty expert still runs on zero rows: every parameter joins the
-            # graph, so DDP/FSDP never see an unused parameter.
-            tok, slot = torch.where(idx == e)
-            out[tok] += self.experts[e](xf[tok]) * weights[tok, slot, None]
+        out, counts = dispatch(self.experts, xf, idx, weights.type_as(xf))
         if self.shared is not None:
             out = out + self.shared(xf)
 
-        self.last_counts = torch.bincount(idx.flatten(), minlength=self.n_experts).detach()
+        self.last_counts = counts.detach()
         return out.view(B, S, D), aux, z
 
 
@@ -272,18 +285,11 @@ class StableLatentMoE(RoutedMoE):
         full = x.reshape(-1, D)
         weights, idx = self.gate(full)
         latent = self.routed_expert_down_proj(full)
-        weights = weights.type_as(latent)
-
-        routed = torch.zeros_like(latent)
-        for e in range(self.n_experts):
-            # An empty expert still runs on zero rows: every parameter joins the
-            # graph, so DDP/FSDP never see an unused parameter.
-            tok, slot = torch.where(idx == e)
-            routed[tok] += self.experts[e](latent[tok]) * weights[tok, slot, None]
+        routed, counts = dispatch(self.experts, latent, idx, weights.type_as(latent))
 
         routed = self.routed_expert_up_proj(self.routed_expert_norm(routed))
         out = self.shared_experts(full) + routed
-        self.last_counts = torch.bincount(idx.flatten(), minlength=self.n_experts).detach()
+        self.last_counts = counts.detach()
         zero = torch.zeros((), device=x.device, dtype=torch.float32)
         return out.view(B, S, D), zero, zero
 
