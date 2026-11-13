@@ -108,6 +108,10 @@ class TrainConfig:
     global_batch_tokens: int = 0
     compile: bool = False
     activation_checkpointing: bool = False
+    # With checkpointing on: the last N blocks keep their activations instead of being
+    # recomputed in backward. Each saves one block's forward (~1/24 of a step's recompute
+    # at L size) for its activation memory; raise until the GPU is nearly full.
+    ckpt_skip_last: int = 0
     source_weights: Dict[str, float] = field(default_factory=dict)  # train-time sampling
     snapshot_freq: int = 0  # >0 keeps a weights-only checkpoint every N steps
     peak_tflops: float = 0.0  # per-GPU dense peak for MFU logging; 0 disables

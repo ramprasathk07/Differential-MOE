@@ -137,19 +137,27 @@ def test_mhc_starts_close_to_standard_residual():
     assert (a - b).abs().max() < 0.05 * a.abs().max()
 
 
-def test_activation_checkpointing_matches_plain_backward():
+def test_activation_checkpointing_matches_plain_backward(monkeypatch):
+    import src.model.transformer as tr
+
     torch.manual_seed(0)
     model = Transformer(make_config(ffn="moe", residual="attnres", norm="derf", attnres_block_layers=1))
+    n = len(model.blocks)
+    calls = []
+    monkeypatch.setattr(tr, "checkpoint", lambda *a, **k: calls.append(1) or torch.utils.checkpoint.checkpoint(*a, **k))
     x = torch.randint(0, 64, (2, 16))
     grads = []
-    for ckpt in (False, True):
+    for ckpt, skip, expected_calls in ((False, 0, 0), (True, 0, n), (True, 1, n - 1), (True, n, 0)):
         model.zero_grad()
-        model.gradient_checkpointing = ckpt
+        model.gradient_checkpointing, model.ckpt_skip_last = ckpt, skip
+        calls.clear()
         logits, aux, z = model(x)
         (logits.sum() + aux + z).backward()
+        assert len(calls) == expected_calls, (ckpt, skip)
         grads.append([p.grad.clone() for p in model.parameters()])
-    for g0, g1 in zip(*grads):
-        assert torch.allclose(g0, g1, atol=1e-5)
+    for other in grads[1:]:
+        for g0, g1 in zip(grads[0], other):
+            assert torch.allclose(g0, g1, atol=1e-5)
 
 
 def test_yaml_inheritance_and_overrides(tmp_path):

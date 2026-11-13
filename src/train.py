@@ -394,6 +394,7 @@ def main():
         raw_model = Transformer(cfg.model)
     counts = count_params(raw_model)
     raw_model.gradient_checkpointing = cfg.train.activation_checkpointing
+    raw_model.ckpt_skip_last = cfg.train.ckpt_skip_last
     if cfg.train.compile:
         raw_model.compile_blocks()
     if is_main:
