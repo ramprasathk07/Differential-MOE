@@ -51,6 +51,10 @@ python -m src.train --config configs/l_diffmoe.yaml --gpus 0,1,2,3
 python -m src.train --config configs/l_diffmoe.yaml --gpus 0
 ```
 
+- **Background runs:** `nohup` alone does not survive closing the terminal, because
+  torchrun installs its own SIGHUP handler and stops the run. Start it in its own
+  session instead: `setsid nohup python -m src.train ... > log 2>&1 < /dev/null &`
+  (or run it inside tmux).
 - **Resume:** run the same command again. It picks up `last.pt` even if the GPU
   count changed (for example, 4 GPUs one week and 1 GPU the next).
 - **Before committing days:** run `--max_steps 200 --no-mlflow` once per cell
