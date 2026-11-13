@@ -142,6 +142,17 @@ def gather_state(raw_model, optimizer, fsdp: bool):
     return get_model_state_dict(raw_model, options=opts), get_optimizer_state_dict(raw_model, optimizer, options=opts)
 
 
+def hold_gathered(model, hold: bool) -> None:
+    """FSDP2 gradient accumulation. Weights cannot change inside one optimizer step, so
+    hold=True keeps every gathered bf16 weight resident between micro-batches instead of
+    re-gathering each block in every forward and again in every backward (~+4 GB at L
+    size). hold=False restores FSDP's defaults; use it for the last micro-batch so all
+    weights are resharded before the optimizer step, evals and checkpoints."""
+    model.set_reshard_after_backward(not hold)  # root + blocks
+    for block in model.blocks:  # the root never reshards after forward
+        block.set_reshard_after_forward(not hold, recurse=False)
+
+
 def load_state(raw_model, optimizer, ckpt, fsdp: bool, is_main: bool):
     if not fsdp:
         raw_model.load_state_dict(ckpt["model"])
@@ -590,7 +601,8 @@ def main():
             x, y = get_batch(train_data, cfg.train.batch_size, cfg.model.seq_len, gen, device, starts)
             if fsdp:
                 model.set_requires_gradient_sync(last_micro)
-            sync = model.no_sync() if (parallel == "ddp" and not last_micro) else contextlib.nullcontext()
+                hold_gathered(model, hold=not last_micro)
+            sync =model.no_sync() if (parallel == "ddp" and not last_micro) else contextlib.nullcontext()
             with sync:
                 with torch.autocast(device_type=device_type, dtype=amp_dtype, enabled=autocast_on):
                     logits, aux_loss, z_loss = model(x)

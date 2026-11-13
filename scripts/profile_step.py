@@ -21,6 +21,7 @@ import torch.nn.functional as F  # noqa: E402
 from torch.autograd import DeviceType  # noqa: E402
 
 from src.model import Config, Transformer  # noqa: E402
+from src.train import hold_gathered  # noqa: E402
 
 
 def main():
@@ -31,6 +32,8 @@ def main():
     ap.add_argument("--iters", type=int, default=3)
     ap.add_argument("--fsdp", action="store_true", help="wrap like the trainer (FSDP2, world size 1)")
     ap.add_argument("--compile", action="store_true", help="model.compile_blocks(), like train.compile=true")
+    ap.add_argument("--no_hold", action="store_true",
+                    help="with --fsdp: re-gather weights every forward/backward (FSDP default, pre-hold_gathered)")
     ap.add_argument("--device", default="cuda")
     args = ap.parse_args()
 
@@ -56,6 +59,9 @@ def main():
         for block in model.blocks:
             fully_shard(block, mp_policy=mp)
         fully_shard(model, mp_policy=mp)
+        # Time a middle micro-batch of an accumulation window, as in src/train.py.
+        model.set_requires_gradient_sync(False)
+        hold_gathered(model, hold=not args.no_hold)
     x = torch.randint(1, cfg.vocab_size, (args.batch, cfg.seq_len), device=dev)
     x[:, ::997] = max(cfg.eos_id, 0)  # document boundaries, like real packed data
 
@@ -88,7 +94,8 @@ def main():
     print(events.table(sort_by=sort, row_limit=25, max_name_column_width=60))
     # Summary last, so `| tail -3` keeps it.
     print(f"\n{cfg.attention}/{cfg.ffn} norm={cfg.norm} residual={cfg.residual} xsa={cfg.xsa} "
-          f"flex={cfg.flex_attention} fsdp={args.fsdp} compile={args.compile} batch={args.batch}x{cfg.seq_len} "
+          f"flex={cfg.flex_attention} fsdp={args.fsdp} hold={args.fsdp and not args.no_hold} "
+          f"compile={args.compile} batch={args.batch}x{cfg.seq_len} "
           f"ckpt={model.gradient_checkpointing} ckpt_skip_last={model.ckpt_skip_last}")
     adam_gb = 8 * n_params / 2**30  # two fp32 AdamW states per parameter, not allocated here
     print(f"{tok_s:,.0f} tok/s  ({dt:.2f} s per micro-batch)  peak {peak:.1f} GB "
