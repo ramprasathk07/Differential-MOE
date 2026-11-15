@@ -469,10 +469,13 @@ def main():
     if not targets:
         raise SystemExit("no checkpoints found; pass --runs checkpoints/<run> (with best/ or snapshots/) or .pt files")
 
-    data = load_tokens(os.path.join(args.data_dir, f"{args.split}.bin"))
-    spans = source_spans(args.data_dir, args.split)
+    # blimp alone needs only a tokenizer (data_dir/meta.json or data_dir/tokenizer.json), not the split
+    needs_data = bool({"core", "position", "attention"} & set(args.suite))
+    split_bin = os.path.join(args.data_dir, f"{args.split}.bin")
+    data = load_tokens(split_bin) if needs_data else []
+    spans = source_spans(args.data_dir, args.split) if needs_data else None
     tok = resolve_data_tokenizer(args.data_dir)
-    bpt = bytes_per_token_estimate(args.data_dir, os.path.join(args.data_dir, f"{args.split}.bin"))
+    bpt = bytes_per_token_estimate(args.data_dir, split_bin) if needs_data else None
     freq = None
     train_bin = os.path.join(args.data_dir, "train.bin")
     if "core" in args.suite and os.path.exists(train_bin):
