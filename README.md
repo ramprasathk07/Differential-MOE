@@ -103,6 +103,10 @@ Bytes per token was measured on the first 2,000 tokens of the split, which are C
 
   ![NLL by position](assets/fig_l_position.png)
 
+- **Grammar (BLiMP)** improved in every field, from 57.6% to 61.7%. 17 of 67 paradigms are still at or below chance, which is normal at 0.8B tokens:
+
+  ![BLiMP by field and paradigm](assets/fig_l_blimp.png)
+
 - **Throughput** rose from 2.8k to **13.4k tok/s** on 2 GPUs (22.9% MFU) with identical training math:
 
   ![Throughput by session](assets/fig_l_throughput.png)
