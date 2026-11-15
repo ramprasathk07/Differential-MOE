@@ -96,6 +96,12 @@ class TrainConfig:
     warmup_steps: int = 140
     weight_decay: float = 0.1
     grad_clip: float = 1.0
+    # Clip 1-element parameters (Derf/DyT alpha and shift, embedding scale) as their own group, so a
+    # spike in one scalar no longer shrinks every other weight's update. False = one global norm.
+    clip_scalars_separately: bool = False
+    # Log the top parameters by gradient norm to <run_dir>/grad_spikes.jsonl when the pre-clip norm
+    # exceeds this multiple of the median of the last 50 steps (or is nan/inf). 0 disables.
+    spike_factor: float = 10.0
     beta1: float = 0.9
     beta2: float = 0.95
     amp: bool = True  # mixed precision on/off
