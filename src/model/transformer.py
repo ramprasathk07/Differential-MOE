@@ -27,6 +27,8 @@ class Transformer(nn.Module):
         super().__init__()
         self.cfg = cfg
         self.embed = nn.Embedding(cfg.vocab_size, cfg.dim)
+        # shape (1,) not (): FSDP2 shards along dim 0
+        self.embed_scale = nn.Parameter(torch.full((1,), math.sqrt(cfg.dim))) if cfg.embed_scale else None
         self.blocks = nn.ModuleList([Block(cfg, i) for i in range(cfg.n_layers)])
         self.norm = make_norm(cfg, cfg.dim)
         self.final_res = AttnRes(cfg.dim, cfg.norm_eps) if cfg.residual == "attnres" else None
@@ -65,7 +67,9 @@ class Transformer(nn.Module):
         assert tokens.size(1) <= self.cfg.seq_len, "sequence longer than rope cache"
         cfg = self.cfg
         x = self.embed(tokens)
-        mask = document_mask(tokens, cfg.eos_id, self.use_flex) if cfg.doc_mask else None
+        if self.embed_scale is not None:
+            x = x * self.embed_scale
+        mask =document_mask(tokens, cfg.eos_id, self.use_flex) if cfg.doc_mask else None
         if cfg.residual == "attnres":
             state = ([x], None)
         elif cfg.residual == "mhc":

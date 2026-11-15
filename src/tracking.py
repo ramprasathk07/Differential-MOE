@@ -123,6 +123,8 @@ def arch_metrics(prefix, diag):
             metrics[f"{prefix}/norm_shift_{layer}"] = shift
     for layer, value in diag.get("mhc_res_diag", {}).items():
         metrics[f"{prefix}/mhc_res_diag_{layer}"] = value
+    if "embed_scale" in diag:
+        metrics[f"{prefix}/embed_scale"] = diag["embed_scale"]
     return metrics
 
 

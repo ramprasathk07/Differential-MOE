@@ -16,6 +16,9 @@ class ModelConfig:
     n_heads: int = 6  # standard-attention head count; differential uses n_heads // 2
     seq_len: int = 512
     tie_embeddings: bool = True
+    # Learnable scalar after the embedding, initialised to sqrt(dim) (DyT paper, sec. 7). Without a
+    # norm that rescales, a std-0.02 embedding reaches layer 0 at RMS ~0.02 and its attention stays uniform.
+    embed_scale: bool = False
 
     # attention
     attention: Literal["standard", "differential"] = "standard"
