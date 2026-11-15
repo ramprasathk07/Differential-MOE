@@ -239,6 +239,8 @@ def train_time_diagnostics(raw_model: Transformer) -> Dict[str, Any]:
             mhc = getattr(block, f"{part}_mhc", None)
             if mhc is not None and mhc.last_res_diag is not None:
                 diag["mhc_res_diag"][f"L{i}_{part}"] = float(mhc.last_res_diag)
+    if raw_model.embed_scale is not None:
+        diag["embed_scale"] = full_tensor(raw_model.embed_scale.detach()).item()
     if raw_model.final_res is not None and raw_model.final_res.last_weights is not None:
         diag["attnres_weights"]["final"] = raw_model.final_res.last_weights.float().cpu().tolist()
     return diag

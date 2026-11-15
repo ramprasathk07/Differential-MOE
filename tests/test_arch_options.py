@@ -92,6 +92,25 @@ def test_pointwise_norm_init(kind, fn):
     assert torch.allclose(PointwiseNorm(16, kind, 0.5)(x), fn(x))
 
 
+@pytest.mark.parametrize("residual", ["standard", "attnres"])
+def test_embed_scale_multiplies_the_embedding_and_learns(residual):
+    torch.manual_seed(0)
+    plain = Transformer(make_config(norm="derf", residual=residual))
+    torch.manual_seed(0)
+    scaled = Transformer(make_config(norm="derf", residual=residual, embed_scale=True))
+    assert scaled.embed_scale.item() == pytest.approx(32 ** 0.5)  # sqrt(dim) for dim 32
+    x = torch.randint(0, 64, (2, 16))
+    with torch.no_grad():
+        scaled.embed_scale.fill_(1.0)  # scale 1 == no scale: same weights, same logits
+        assert torch.allclose(plain(x)[0], scaled(x)[0], atol=1e-6)
+        scaled.embed_scale.fill_(32 ** 0.5)
+        assert not torch.allclose(plain(x)[0], scaled(x)[0], atol=1e-3)
+    logits, aux, z = scaled(x)
+    logits.float().sum().backward()
+    assert scaled.embed_scale.grad is not None and scaled.embed_scale.grad.abs().item() > 0
+    assert "embed_scale" not in dict(plain.named_parameters())  # off by default: old checkpoints load
+
+
 def test_attnres_starts_as_uniform_average():
     sources = [torch.randn(2, 3, 8) for _ in range(4)]
     assert torch.allclose(AttnRes(8)(sources), torch.stack(sources).mean(0), atol=1e-6)
