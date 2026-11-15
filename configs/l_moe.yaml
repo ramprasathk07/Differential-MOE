@@ -1,0 +1,11 @@
+# L tier, MoE: standard attention + 8 experts top-2. Active FFN = 2 x 2048 x 3d,
+# which matches dense inter_dim 4096 (expert width = dense / top_k), as in the S tier.
+base: l_base.yaml
+run_name: l_moe
+model:
+  ffn: moe
+  n_experts: 8
+  top_k: 2
+  expert_inter_dim: 2048
+  aux_loss_coef: 0.01
+  router_z_coef: 0.001

@@ -32,3 +32,47 @@ def test_moe_raw_exceeds_active():
                        expert_inter_dim=512, n_layers=8, vocab_size=4096)
     counts = count_params(Transformer(cfg))
     assert counts["total"] > counts["active"], "MoE raw params should exceed active params"
+
+
+def test_stable_latent_moe_matches_trained_moe_budgets():
+    # Scale-equivalent miniature of the tier-S 768/384 geometry. Keeping all
+    # width ratios and expert counts identical verifies the same accounting
+    # without allocating two ~379M-parameter models in the unit test suite.
+    common = dict(
+        vocab_size=128,
+        dim=48,
+        n_layers=4,
+        n_heads=6,
+        seq_len=16,
+        attention="standard",
+        inter_dim=192,
+        n_dense_layers=1,
+    )
+    baseline = ModelConfig(
+        **common,
+        ffn="moe",
+        n_experts=6,
+        top_k=2,
+        expert_inter_dim=96,
+    )
+    latent = ModelConfig(
+        **common,
+        ffn="stable_latent_moe",
+        latent_dim=24,
+        n_experts=16,
+        top_k=4,
+        expert_inter_dim=64,
+        n_shared_experts=2,
+        shared_inter_dim=24,
+        aux_loss_coef=0.0,
+        router_z_coef=0.0,
+    )
+    base_counts = count_params(Transformer(baseline))
+    latent_counts = count_params(Transformer(latent))
+    expected_fixed_overhead = (common["n_layers"] - common["n_dense_layers"]) * (
+        (latent.n_experts - baseline.n_experts) * common["dim"] + latent.latent_dim
+    )
+    for key in ("total", "active"):
+        # Expert/shared/projection budgets match exactly. The only intended
+        # delta is the larger router plus one latent RMSNorm per routed layer.
+        assert latent_counts[key] - base_counts[key] == expected_fixed_overhead

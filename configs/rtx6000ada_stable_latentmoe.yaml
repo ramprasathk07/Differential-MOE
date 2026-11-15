@@ -1,0 +1,68 @@
+# From-scratch English pretraining on ONE RTX 6000 Ada (48 GB).
+# Commands and memory notes: configs/rtx6000ada_stable_latentmoe.md
+# Uses the existing FP16 trainer on one GPU, without offload or activation checkpointing.
+run_name: rtx6000ada_stable_latentmoe_fineweb_edu
+data_dir: data_fineweb_edu
+
+# Consumed by `python -m src.data.prepare_hf --config <this file>`.
+# src.train reads the prepared .bin files from data_dir.
+data:
+  dataset: HuggingFaceFW/fineweb-edu
+  subset: sample-10BT
+  revision: v1.4.0
+  split: train
+  text_column: text
+  tokenizer: hf:HuggingFaceTB/SmolLM2-135M
+  train_tokens: 2200000000
+  val_tokens: 1000000
+  test_tokens: 1000000
+  # Hash whole documents before packing; duplicates stay in the same split.
+  val_fraction: 0.005
+  test_fraction: 0.005
+  shuffle_buffer: 10000
+  seed: 42
+
+model:
+  vocab_size: 49152       # SmolLM2 tokenizer; uint16 token files
+  dim: 1024
+  n_layers: 20
+  n_heads: 16            # 64 dimensions per head, standard SDPA attention
+  seq_len: 1024
+  tie_embeddings: true
+  attention: standard
+  rope_theta: 10000.0
+
+  ffn: stable_latent_moe
+  inter_dim: 4096
+  n_dense_layers: 2
+  latent_dim: 512
+  n_experts: 16
+  top_k: 4
+  expert_inter_dim: 1536
+  n_shared_experts: 2
+  shared_inter_dim: 512
+  situ_beta: 4.0
+  situ_linear_beta: 25.0
+  quantile_balance: true
+  aux_loss_coef: 0.0
+  router_z_coef: 0.0
+  norm_eps: 1.0e-6
+
+train:
+  batch_size: 2
+  accum_steps: 32        # 2 * 1024 * 32 = 65,536 tokens/update on one GPU
+  max_steps: 32768       # 2,147,483,648 sampled training tokens
+  lr: 2.0e-4
+  min_lr_ratio: 0.1
+  warmup_steps: 1000
+  weight_decay: 0.1
+  grad_clip: 1.0
+  beta1: 0.9
+  beta2: 0.95
+  amp: true             # Current trainer implements FP16 + GradScaler
+  log_freq: 10
+  eval_freq: 500
+  eval_batches: 100      # 204,800 fixed validation tokens per evaluation
+  ckpt_freq: 500
+  max_best_checkpoints: 1
+  seed: 42

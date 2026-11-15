@@ -1,0 +1,19 @@
+# L tier, Stable LatentMoE (Kimi-style, kept from the earlier design): sigmoid router
+# with Quantile Balancing, SiTU-GLU experts in a d/2 latent space, full-width shared
+# expert. Sized to the MoE cell's budgets exactly: 32*d^2 total and 8*d^2 active FFN
+# params per routed layer (proj 2*(d*d/2) + shared 3*d*(2*256) + 20 x 3*(d/2)*1536).
+base: l_base.yaml
+run_name: l_latentmoe
+model:
+  ffn: stable_latent_moe
+  latent_dim: 768
+  n_experts: 20
+  top_k: 4
+  expert_inter_dim: 1536
+  n_shared_experts: 2
+  shared_inter_dim: 256
+  situ_beta: 4.0
+  situ_linear_beta: 25.0
+  quantile_balance: true
+  aux_loss_coef: 0.0
+  router_z_coef: 0.0

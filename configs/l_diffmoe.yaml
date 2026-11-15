@@ -1,0 +1,5 @@
+# L tier, Diff-MoE: differential attention + 8 experts top-2.
+base: l_moe.yaml
+run_name: l_diffmoe
+model:
+  attention: differential

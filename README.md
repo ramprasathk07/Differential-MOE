@@ -220,17 +220,38 @@ python scripts/make_figures_part1.py
 
 For the one-click Kaggle path see `notebooks/`.
 
+For a larger Stable LatentMoE run on one **RTX 6000 Ada (48 GB)**, see the
+[training recipe](configs/rtx6000ada_stable_latentmoe.md) and
+[YAML](configs/rtx6000ada_stable_latentmoe.yaml). It includes streaming preparation
+of Hugging Face FineWeb-Edu, 915M total / 405M active parameters, and a 2.15B-token
+training schedule.
+
+For automatic W&B login with a plain `python -m src.train` launch, copy
+[.env.example](.env.example) to `.env` and set `WANDB_API_KEY`. See the
+[W&B setup and metric list](configs/rtx6000ada_stable_latentmoe.md#wb-login-and-metrics).
+
+**L tier (scale-up, in progress).** Six 0.78B-active cells (2.0B total for MoE)
+at 4096 context on SlimPajama, with Derf, Block AttnRes, XSA and document
+masking switched on, trained with FSDP2 on 1–4 GPUs (`--gpus 0,1,2,3`) and
+evaluated on a 12 GB RTX 3060 (`scripts/eval_l.py`). Run guide:
+[configs/l_tier.md](configs/l_tier.md).
+
+![L-tier forward pass: tokens → embedding → 24 layers of AttnRes mix → attention + XSA → FFN, with block representations mixed over depth and a document mask on attention](assets/fig_l_architecture.png)
+
+<sub>Interactive version: [assets/fig_l_architecture.html](assets/fig_l_architecture.html) (download and open locally) · source: [fig_l_architecture.architecture.json](assets/fig_l_architecture.architecture.json), rendered with Archify.</sub>
+
 </details>
 
 <details>
 <summary><b>📁 Project structure & tests</b></summary>
 
 ```
-configs/      the 2×2 at three scales (a_*, s_*, b_final)
+configs/      the 2×2 at four scales (a_*, s_*, b_final, l_* + l_tier.md)
 src/
-  model/      attention.py (both variants) · moe.py · block.py · transformer.py
+  model/      attention.py (both variants, XSA, Derf/DyT) · residual.py (AttnRes, mHC)
+              moe.py · block.py · transformer.py
   data/       babylm.py · tokenizer.py · prepare.py · verify.py · dataset.py
-  train.py    AMP, accumulation, checkpoint/resume, DDP, W&B
+  train.py    AMP, accumulation, checkpoint/resume, DDP/FSDP2, --gpus, W&B, MLflow
   eval.py     NLL, ppl, bits/byte, expert utilization, λ logging
   params.py   raw vs active parameter accounting
 scripts/      the evaluation battery + figure generation (see Reproduce)

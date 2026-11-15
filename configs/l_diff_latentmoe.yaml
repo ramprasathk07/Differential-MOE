@@ -1,0 +1,5 @@
+# L tier, differential attention + Stable LatentMoE.
+base: l_latentmoe.yaml
+run_name: l_diff_latentmoe
+model:
+  attention: differential

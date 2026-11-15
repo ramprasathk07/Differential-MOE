@@ -1,0 +1,3 @@
+# L tier, Dense: standard attention + dense SwiGLU. Everything else in l_base.yaml.
+base: l_base.yaml
+run_name: l_dense
