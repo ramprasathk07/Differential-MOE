@@ -30,7 +30,7 @@ class Block(nn.Module):
             self.ffn = StableLatentMoE(cfg) if cfg.ffn == "stable_latent_moe" else MoE(cfg)
         else:
             self.ffn = SwiGLU(cfg.dim, cfg.inter_dim)
-        self.attn_norm = make_norm(cfg, cfg.dim)
+        self.attn_norm = make_norm(cfg, cfg.dim, cfg.norm_alpha_init_attn)
         self.ffn_norm = make_norm(cfg, cfg.dim)
 
         self.residual = cfg.residual

@@ -52,6 +52,9 @@ class ModelConfig:
     # the L tier switches them on.
     norm: Literal["rmsnorm", "dyt", "derf"] = "rmsnorm"  # pre-attn, pre-FFN and final norm
     norm_alpha_init: float = 0.5
+    # Pre-attention norms only; None = norm_alpha_init. DyT (sec. 7) gives attention norms a larger
+    # alpha than FFN/final norms in LLMs (LLaMA-7B: 0.8 vs 0.2).
+    norm_alpha_init_attn: Optional[float] = None
     residual: Literal["standard", "attnres", "mhc"] = "standard"
     attnres_block_layers: int = 3  # Block AttnRes: layers per block
     mhc_streams: int = 4
