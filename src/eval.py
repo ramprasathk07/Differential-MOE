@@ -3,12 +3,13 @@ MoE routing entropy/utilization, differential-attention lambda values.
 
 Bits-per-byte is the tokenizer-independent number (docs/plan.md SS3) -- it needs
 the raw byte length of the text the evaluated tokens came from, so callers pass
-`bytes_per_token` (mean UTF-8 bytes per token, measured once from the val text).
+`bytes_per_token` (UTF-8 bytes per token of the evaluated split: one float, or one
+per source from bytes_per_token_estimate(..., spans)).
 """
 
 import math
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Union
 
 import torch
 import torch.nn.functional as F
@@ -62,7 +63,7 @@ class EvalResult:
 def evaluate(
     model: Transformer,
     batches,
-    bytes_per_token: Optional[float] = None,
+    bytes_per_token: Union[float, Dict[str, float], None] = None,
     *,
     source_names: Sequence[str] = (),
     position_buckets: int = 0,
@@ -111,13 +112,16 @@ def evaluate(
     nll = total_nll / total_tokens
     ppl = math.exp(min(nll, 50))  # guard exp overflow on early / broken runs
     bits_per_token = nll / math.log(2)
-    bits_per_byte = bits_per_token / bytes_per_token if bytes_per_token else None
+    by_source = {n: src_sums[j].tolist() for j, n in enumerate(names)}
+    if sum(t for _, t in by_source.values()) != total_tokens:  # no (or partial) source labels: pool it all
+        by_source = {"all": (total_nll, total_tokens)}
+    pooled_bpb, source_bpb = bits_per_byte(by_source, bytes_per_token)
 
     result = EvalResult(
         nll=nll,
         perplexity=ppl,
         bits_per_token=bits_per_token,
-        bits_per_byte=bits_per_byte,
+        bits_per_byte=pooled_bpb,
         top1_acc=total_correct / total_tokens,
     )
     if position_buckets and pos_sums is not None:
@@ -129,8 +133,7 @@ def evaluate(
         s_nll, s_tok = src_sums[j].tolist()
         if s_tok:
             result.per_source[name] = {"nll": s_nll / s_tok, "tokens": s_tok,
-                                       "bits_per_byte": (s_nll / s_tok / math.log(2) / bytes_per_token)
-                                       if bytes_per_token else None}
+                                       "bits_per_byte": source_bpb.get(name)}
 
     for i, counts in expert_counts_sum.items():
         result.expert_entropy[i], result.expert_imbalance[i] = expert_stats(counts)
@@ -152,11 +155,13 @@ def lambda_of(attn) -> List[float]:
     return lam.cpu().tolist()
 
 
-def bytes_per_token_estimate(data_dir: str, bin_path: str, n_sample: int = 2000):
-    """Mean UTF-8 bytes per token, measured by decoding a sample of the split.
+def bytes_per_token_estimate(data_dir: str, bin_path: str, spans: Optional[Dict[str, Sequence[int]]] = None):
+    """UTF-8 bytes per token, from decoding every token of the split.
 
-    Returns None when the data_dir has no resolvable tokenizer, in which case
-    bits-per-byte is simply not reported.
+    With `spans` ({source: [lo, hi)}) returns {source: bytes/token} over each source's whole
+    span, so every source's bits/byte uses its own ratio (sources differ by up to 40%).
+    Without spans, one float for the whole split. None when data_dir has no resolvable
+    tokenizer, in which case bits-per-byte is not reported.
     """
     from src.data.dataset import load_tokens
     from src.data.tokenizer import resolve_data_tokenizer
@@ -165,8 +170,34 @@ def bytes_per_token_estimate(data_dir: str, bin_path: str, n_sample: int = 2000)
     if tok is None:
         return None
     data = load_tokens(bin_path)  # reads the dtype prepare.py recorded
-    sample = data[:n_sample].astype(int).tolist()
-    return len(tok.decode(sample).encode("utf-8")) / len(sample)
+
+    def ratio(ids, chunk=1 << 20):
+        # Chunked to bound memory; a chunk edge can split one multi-byte character (a few bytes per 4 MB).
+        n_bytes = sum(len(tok.decode(ids[i:i + chunk].astype(int).tolist()).encode("utf-8"))
+                      for i in range(0, len(ids), chunk))
+        return n_bytes / max(1, len(ids))
+
+    if spans:
+        return {name: ratio(data[lo:hi]) for name, (lo, hi) in spans.items()}
+    return ratio(data)
+
+
+def bits_per_byte(sums: Dict[str, Sequence[float]], bytes_per_token) -> tuple:
+    """(pooled bits/byte, {source: bits/byte}) from {source: (nll_sum_nats, n_tokens)}.
+
+    `bytes_per_token` is one float for every source or {source: bytes/token}. The pooled value
+    is total bits over total bytes, so each source's bytes are counted at its own ratio.
+    (None, {}) when bytes_per_token is missing or lacks one of the sources.
+    """
+    if not bytes_per_token:
+        return None, {}
+    rate = bytes_per_token if isinstance(bytes_per_token, dict) else {n: bytes_per_token for n in sums}
+    sums = {n: st for n, st in sums.items() if st[1]}
+    if not sums or any(n not in rate for n in sums):
+        return None, {}
+    per = {n: s / t / math.log(2) / rate[n] for n, (s, t) in sums.items()}
+    pooled = sum(s for s, _ in sums.values()) / math.log(2) / sum(t * rate[n] for n, (_, t) in sums.items())
+    return pooled, per
 
 
 @torch.no_grad()

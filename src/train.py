@@ -495,7 +495,6 @@ def main():
 
     train_data = load_tokens(train_path)
     val_data = load_tokens(val_path)
-    bytes_per_token = bytes_per_token_estimate(cfg.data_dir, val_path)
     sampler = None
     docs_path = os.path.join(cfg.data_dir, "train_docs.npz")
     if cfg.train.source_weights:
@@ -512,6 +511,7 @@ def main():
             spans = json.load(f).get("val")
         if spans is not None and len(spans) < 2:
             spans = None  # one span == the whole stream; keep the legacy windows
+    bytes_per_token = bytes_per_token_estimate(cfg.data_dir, val_path, spans)  # per source when spans exist
     val_windows = eval_windows(len(val_data), cfg.model.seq_len, cfg.train.eval_batches * cfg.train.batch_size, spans)
     per_round = cfg.train.batch_size * world_size
     val_windows = val_windows[: len(val_windows) - len(val_windows) % per_round] or val_windows[:per_round]
