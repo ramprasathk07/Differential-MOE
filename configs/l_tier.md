@@ -86,6 +86,44 @@ FLOPs for 10B tokens. At 80 to 120 TFLOPS achieved per GPU:
 | Dense cells | 5 to 8 days | 1.4 to 2.1 days |
 | MoE cells (eager expert loop) | about 1.3× dense | about 1.3× dense |
 
+### Before the next full run: the Derf A/B
+
+**Why.** The first `l_diffmoe` run (steps 0 to 1,560) had two linked defects:
+
+- **Dead attention in layers 0 and 1.** It was uniform: entropy 7.384 nats, equal to the uniform value. The std-0.02 embedding reaches Derf at RMS 0.02, and Derf, unlike RMSNorm, does not rescale it.
+- **Gradient spikes.** A single Derf shift carried up to 66% of the squared gradient norm, and the pre-clip norm exceeded 10⁶ on 12% of logged steps.
+
+PRs #8 to #11 describe the evidence.
+
+**The A/B.** Three arms of 300 steps each, from scratch, with identical data and seed. Warmup is 2,000 steps, so the learning rate over these 300 steps matches the full schedule exactly. Each arm takes about 3.3 h on 2 GPUs.
+
+```bash
+COMMON="--config configs/l_diffmoe.yaml --gpus 0,1 --max_steps 300"
+# A: current
+python -m src.train $COMMON --override run_name=l_diffmoe_ab_base
+# B: fixed
+python -m src.train $COMMON --override run_name=l_diffmoe_ab_fix \
+    --override model.embed_scale=true \
+    --override model.norm_alpha_init_attn=0.8 --override model.norm_alpha_init=0.2 \
+    --override train.clip_scalars_separately=true
+# C: RMSNorm control
+python -m src.train $COMMON --override run_name=l_diffmoe_ab_rms --override model.norm=rmsnorm
+
+# then, on the eval machine
+python scripts/eval_l.py --runs checkpoints/l_diffmoe_ab_base checkpoints/l_diffmoe_ab_fix \
+    checkpoints/l_diffmoe_ab_rms --suite core attention uncertainty --out_dir eval_results/ab
+```
+
+**Pass criteria for arm B.**
+
+1. Layer 0 and 1 attention entropy is clearly below the uniform 7.38 (`attention.per_layer[0:2]`).
+2. Fewer than 5% of steps after step 100 have a pre-clip `train/grad_norm` above 10. Every spike that remains is attributed in `grad_spikes.jsonl`.
+3. Step-300 loss is no worse than arm A's.
+
+**If it passes:** set `embed_scale`, the two α values and `clip_scalars_separately` in `l_base.yaml`, and restart every L cell.
+
+**If B loses to C:** consider replacing Derf with RMSNorm for the L tier.
+
 ## 3 · What gets logged
 
 - **W&B** (`.env`: `WANDB_*`):
