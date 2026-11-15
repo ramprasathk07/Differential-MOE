@@ -92,6 +92,17 @@ def test_pointwise_norm_init(kind, fn):
     assert torch.allclose(PointwiseNorm(16, kind, 0.5)(x), fn(x))
 
 
+@pytest.mark.parametrize("norm", ["derf", "dyt"])
+def test_attention_norms_can_start_with_their_own_alpha(norm):
+    model = Transformer(make_config(norm=norm, norm_alpha_init=0.2, norm_alpha_init_attn=0.8))
+    for block in model.blocks:
+        assert block.attn_norm.alpha.item() == pytest.approx(0.8)
+        assert block.ffn_norm.alpha.item() == pytest.approx(0.2)
+    assert model.norm.alpha.item() == pytest.approx(0.2)
+    default = Transformer(make_config(norm=norm, norm_alpha_init=0.3))  # unset: one alpha everywhere
+    assert {round(m.alpha.item(), 6) for m in default.modules() if isinstance(m, PointwiseNorm)} == {0.3}
+
+
 def test_attnres_starts_as_uniform_average():
     sources = [torch.randn(2, 3, 8) for _ in range(4)]
     assert torch.allclose(AttnRes(8)(sources), torch.stack(sources).mean(0), atol=1e-6)

@@ -76,10 +76,10 @@ class PointwiseNorm(nn.Module):
         return y * self.weight + self.bias
 
 
-def make_norm(cfg: ModelConfig, dim: int) -> nn.Module:
+def make_norm(cfg: ModelConfig, dim: int, alpha_init: Optional[float] = None) -> nn.Module:
     if cfg.norm == "rmsnorm":
         return RMSNorm(dim, cfg.norm_eps)
-    return PointwiseNorm(dim, cfg.norm, cfg.norm_alpha_init)
+    return PointwiseNorm(dim, cfg.norm, cfg.norm_alpha_init if alpha_init is None else alpha_init)
 
 
 def exclude_self(o: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
