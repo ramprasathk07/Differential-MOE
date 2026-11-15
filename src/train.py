@@ -24,6 +24,7 @@ Checkpoints in <out_dir>/<run_name>/:
 """
 
 import argparse
+import collections
 import contextlib
 import csv
 import json
@@ -151,6 +152,42 @@ def hold_gathered(model, hold: bool) -> None:
     model.set_reshard_after_backward(not hold)  # root + blocks
     for block in model.blocks:  # the root never reshards after forward
         block.set_reshard_after_forward(not hold, recurse=False)
+
+
+def clip_groups(model, scalars_apart: bool):
+    """Parameter groups clipped to grad_clip independently. One global norm lets a single huge
+    gradient shrink every update; with scalars_apart, 1-element parameters (Derf/DyT alpha and
+    shift, the embedding scale) form their own group, so a spike in one of them no longer
+    scales down the other two billion weights."""
+    params = [p for p in model.parameters() if p.grad is not None]
+    if not scalars_apart:
+        return [params]
+    return [g for g in ([p for p in params if p.numel() > 1], [p for p in params if p.numel() == 1]) if g]
+
+
+def clip_gradients(model, max_norm: float, scalars_apart: bool, spike_at=None):
+    """Clip each group of clip_groups() to max_norm. Returns (pre-clip global norm, pre-clip norm
+    per group, top parameters by pre-clip norm when the global norm is above spike_at or not
+    finite, else None). Collective under FSDP; every rank gets the same norms, so the same branch."""
+    groups = clip_groups(model, scalars_apart)
+    group_norms = [torch.nn.utils.get_total_norm([p.grad for p in g]) for g in groups]
+    norms = [float(full_tensor(n)) for n in group_norms]
+    total = math.sqrt(sum(n * n for n in norms))
+    top = grad_norm_by_param(model) if spike_at is not None and not total <= spike_at else None
+    for g, n in zip(groups, group_norms):
+        torch.nn.utils.clip_grads_with_norm_(g, max_norm, n)
+    return total, norms, top
+
+
+def grad_norm_by_param(model, top: int = 8):
+    """[(name, gradient norm)] of the `top` largest, for spike attribution. Collective under
+    FSDP2: squared norms of the local shards are summed across ranks in one all_reduce."""
+    named = [(n, p.grad) for n, p in model.named_parameters() if p.grad is not None]
+    sq = torch.stack([(g.to_local() if hasattr(g, "to_local") else g).float().pow(2).sum() for _, g in named])
+    if dist.is_initialized() and any(hasattr(g, "to_local") for _, g in named):
+        dist.all_reduce(sq)
+    norms = sq.sqrt().cpu()
+    return [(named[i][0], float(norms[i])) for i in norms.argsort(descending=True)[:top]]
 
 
 def load_state(raw_model, optimizer, ckpt, fsdp: bool, is_main: bool):
@@ -572,6 +609,7 @@ def main():
     train_start = time.time()
     running_time = 0.0
     skipped_steps = 0
+    grad_hist = collections.deque(maxlen=50)  # recent finite pre-clip norms, for spike detection
     running = np.zeros(3)  # loss, aux, z
     running_count = 0
     src_loss = torch.zeros(len(source_names), dtype=torch.float64, device=device)
@@ -619,7 +657,18 @@ def main():
             pbar.update(1 / accum_steps)
 
         scaler.unscale_(optimizer)
-        grad_norm = full_tensor(torch.nn.utils.clip_grad_norm_(raw_model.parameters(), cfg.train.grad_clip))
+        median = float(np.median(grad_hist)) if len(grad_hist) >= 10 else math.inf
+        spike_at = cfg.train.spike_factor * median if cfg.train.spike_factor > 0 else None
+        grad_norm, norms, top = clip_gradients(raw_model, cfg.train.grad_clip, cfg.train.clip_scalars_separately,
+                                               spike_at)
+        if top is not None and is_main:
+            tqdm.write(f"[spike] step {step + 1} grad_norm {grad_norm:.3g} (median {median:.3g}): "
+                       + ", ".join(f"{n} {v:.3g}" for n, v in top))
+            with open(os.path.join(run_dir, "grad_spikes.jsonl"), "a") as f:
+                f.write(json.dumps({"step": step + 1, "grad_norm": grad_norm, "median": median, "top": top}) + "\n")
+            wandb_metrics["train/spike_grad_norm"] = grad_norm
+        if math.isfinite(grad_norm):
+            grad_hist.append(grad_norm)
         previous_scale = scaler.get_scale()
         scaler.step(optimizer)
         scaler.update()
@@ -659,19 +708,21 @@ def main():
                     f"lr {lr:.2e} grad_norm {grad_norm:.2f} tok/s {tok_per_sec:.0f}{diag_summary}"
                 )
                 csv_writer.writerow(
-                    [step + 1, tokens_trained, avg_loss, ppl, avg_aux, avg_z, lr, grad_norm.item(), tok_per_sec,
+                    [step + 1, tokens_trained, avg_loss, ppl, avg_aux, avg_z, lr, grad_norm, tok_per_sec,
                      "", "", "", ""]
                 )
                 csv_file.flush()
                 log = {"train/loss": avg_loss, "train/ppl": ppl, "train/aux_loss": avg_aux,
                        "train/router_z_loss": avg_z, "train/lr": lr,
-                       "train/grad_norm": grad_norm.item(), "train/tok_per_sec": tok_per_sec,
+                       "train/grad_norm": grad_norm, "train/tok_per_sec": tok_per_sec,
                        "train/tok_per_sec_per_gpu": tok_per_sec / world_size,
                        "train/step_time_s": running_time / running_count,
                        "train/tokens_trained": tokens_trained, "train/epoch": epoch,
                        "train/objective": avg_loss + cfg.model.aux_loss_coef * avg_aux + cfg.model.router_z_coef * avg_z,
                        "train/amp_scale": scaler.get_scale(),
                        "train/skipped_optimizer_steps": skipped_steps}
+                if len(norms) > 1:  # separate scalar clip group: its own pre-clip norm
+                    log["train/grad_norm_scalars"] = norms[1]
                 if cfg.train.peak_tflops:
                     log["train/mfu"] = flops_per_token * tok_per_sec / (cfg.train.peak_tflops * 1e12 * world_size)
                 for j, name in enumerate(source_names):
