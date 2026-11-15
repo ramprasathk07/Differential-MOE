@@ -16,6 +16,9 @@ class ModelConfig:
     n_heads: int = 6  # standard-attention head count; differential uses n_heads // 2
     seq_len: int = 512
     tie_embeddings: bool = True
+    # Learnable scalar after the embedding, initialised to sqrt(dim) (DyT paper, sec. 7). Without a
+    # norm that rescales, a std-0.02 embedding reaches layer 0 at RMS ~0.02 and its attention stays uniform.
+    embed_scale: bool = False
 
     # attention
     attention: Literal["standard", "differential"] = "standard"
@@ -96,6 +99,12 @@ class TrainConfig:
     warmup_steps: int = 140
     weight_decay: float = 0.1
     grad_clip: float = 1.0
+    # Clip 1-element parameters (Derf/DyT alpha and shift, embedding scale) as their own group, so a
+    # spike in one scalar no longer shrinks every other weight's update. False = one global norm.
+    clip_scalars_separately: bool = False
+    # Log the top parameters by gradient norm to <run_dir>/grad_spikes.jsonl when the pre-clip norm
+    # exceeds this multiple of the median of the last 50 steps (or is nan/inf). 0 disables.
+    spike_factor: float = 10.0
     beta1: float = 0.9
     beta2: float = 0.95
     amp: bool = True  # mixed precision on/off

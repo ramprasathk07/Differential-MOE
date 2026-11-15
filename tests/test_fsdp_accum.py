@@ -77,7 +77,8 @@ def _worker(rank, store_path, out_path):
 
 
 @pytest.mark.skipif(not dist.is_gloo_available(), reason="needs gloo")
-def test_hold_gathered_matches_default_with_fewer_gathers(tmp_path):
+def test_hold_gathered_matches_default_with_fewer_gathers(tmp_path, monkeypatch):
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "-1")  # gloo ranks on CPU; FSDP2 would pick cuda:0 if visible
     out = tmp_path / "result.pt"
     mp.spawn(_worker, args=(str(tmp_path / "store").replace("\\", "/"), str(out)), nprocs=2)
     r = torch.load(out)

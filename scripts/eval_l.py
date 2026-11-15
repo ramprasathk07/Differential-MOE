@@ -50,7 +50,7 @@ sys.path.insert(0, ROOT)
 
 from src.data import load_tokens                                  # noqa: E402
 from src.data.tokenizer import resolve_data_tokenizer             # noqa: E402
-from src.eval import bytes_per_token_estimate, expert_stats       # noqa: E402
+from src.eval import bits_per_byte, bytes_per_token_estimate, expert_stats  # noqa: E402
 from src.model import ModelConfig, Transformer, count_params      # noqa: E402
 from src.model.attention import DifferentialAttention, StandardAttention, apply_rope, build_rope_cache  # noqa: E402
 from src.train import train_time_diagnostics                      # noqa: E402
@@ -192,18 +192,19 @@ def suite_core(model, cfg, data, windows, args, bpt, freq, tok):
 
     total_tok = sum(s["tokens"] for s in src.values())
     nll = sum(s["nll"] for s in src.values()) / total_tok
+    pooled_bpb, source_bpb = bits_per_byte({n: (s["nll"], s["tokens"]) for n, s in src.items()}, bpt)
     nz = bin_n > 0
     acc = np.where(nz, corr_sum / np.maximum(bin_n, 1), 0)
     cnf = np.where(nz, conf_sum / np.maximum(bin_n, 1), 0)
     ece = float(((bin_n / bin_n.sum()) * np.abs(acc - cnf)).sum())
     out = {
         "nll": nll, "ppl": math.exp(min(nll, 50)), "bits_per_token": nll / math.log(2),
-        "bits_per_byte": nll / math.log(2) / bpt if bpt else None,
+        "bits_per_byte": pooled_bpb,
         "top1": sum(s["correct"] for s in src.values()) / total_tok,
         "mean_pred_entropy": ent_sum / total_tok, "ece": ece,
         "n_windows": len(windows), "tokens": total_tok,
         "per_source": {n: {"nll": s["nll"] / s["tokens"], "top1": s["correct"] / s["tokens"],
-                           "bits_per_byte": s["nll"] / s["tokens"] / math.log(2) / bpt if bpt else None}
+                           "bits_per_byte": source_bpb.get(n)}
                        for n, s in src.items() if s["tokens"]},
         "nll_by_position_64": [float(c.mean()) for c in np.array_split(pos_sum / len(windows), max(1, S // 64))],
     }
@@ -469,10 +470,13 @@ def main():
     if not targets:
         raise SystemExit("no checkpoints found; pass --runs checkpoints/<run> (with best/ or snapshots/) or .pt files")
 
-    data = load_tokens(os.path.join(args.data_dir, f"{args.split}.bin"))
-    spans = source_spans(args.data_dir, args.split)
+    # blimp alone needs only a tokenizer (data_dir/meta.json or data_dir/tokenizer.json), not the split
+    needs_data = bool({"core", "position", "attention"} & set(args.suite))
+    split_bin = os.path.join(args.data_dir, f"{args.split}.bin")
+    data = load_tokens(split_bin) if needs_data else []
+    spans = source_spans(args.data_dir, args.split) if needs_data else None
     tok = resolve_data_tokenizer(args.data_dir)
-    bpt = bytes_per_token_estimate(args.data_dir, os.path.join(args.data_dir, f"{args.split}.bin"))
+    bpt = bytes_per_token_estimate(args.data_dir, split_bin, spans) if needs_data else None
     freq = None
     train_bin = os.path.join(args.data_dir, "train.bin")
     if "core" in args.suite and os.path.exists(train_bin):
